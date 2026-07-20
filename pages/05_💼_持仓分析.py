@@ -1,0 +1,731 @@
+"""
+页面5：持仓分析 — 可增删改保存 + 基本面 + K线 + 技术指标 + 预测 + 止盈止损 + 仓位
+"""
+
+import streamlit as st
+import sys, os, json
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import config as cfg
+from utils.helpers import fmt_cn, fmt_pct
+import data_fetcher as df_
+import data_manager as dm
+import analyzer as anl
+import visualizer as viz
+import pandas as pd
+import numpy as np
+import streamlit.components.v1 as components
+
+st.set_page_config(page_title="持仓分析", page_icon="💼", layout="wide")
+
+# ============================================================
+# 持仓管理（session_state + 本地json持久化）
+# ============================================================
+
+PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "portfolio.json")
+
+def load_portfolio() -> dict:
+    """加载持仓：优先本地json → config.py"""
+    try:
+        if os.path.exists(PORTFOLIO_FILE):
+            with open(PORTFOLIO_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return dict(cfg.PORTFOLIO)
+
+def save_portfolio(data: dict):
+    """保存持仓到本地json"""
+    os.makedirs(os.path.dirname(PORTFOLIO_FILE), exist_ok=True)
+    with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def _add_from_dropdown():
+    """下拉框选中回调：自动加入持仓"""
+    sel = st.session_state.get("ms", "")
+    if sel and "—" in sel:
+        c, n = sel.split("—")[0].strip(), sel.split("—")[1].strip()
+        st.session_state.portfolio[c] = n
+        st.session_state.ms = ""
+
+# 初始化session_state
+if "portfolio" not in st.session_state:
+    st.session_state.portfolio = load_portfolio()
+
+st.title("💼 持仓股深度分析")
+st.caption(f"数据更新时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+
+# 预加载股票列表（来自本地CSV，一键下载时已保存。首次使用点侧边栏下载）
+STOCK_LIST_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "stock_list.csv")
+stock_list = None
+if os.path.exists(STOCK_LIST_FILE):
+    stock_list = pd.read_csv(STOCK_LIST_FILE, dtype={"code": str, "name": str})
+
+# ============================================================
+# 持仓管理区
+# ============================================================
+# 搜索 + 操作栏
+c1, c2, c3 = st.columns([5, 1, 1])
+with c1:
+    search = st.text_input("🔍 添加持仓（输代码或名称，点结果直接加入）",
+                           placeholder="如 茅台 / 600519",
+                           key="stock_search")
+with c2:
+    st.write("")
+    if st.button("💾 保存", use_container_width=True, type="primary"):
+        save_portfolio(st.session_state.portfolio)
+        st.session_state._just_saved = True
+        st.rerun()
+with c3:
+    st.write("")
+    if st.session_state.get("_just_saved") and st.button("🔄 重新分析", use_container_width=True):
+        st.session_state._just_saved = False
+        st.cache_data.clear()
+        st.rerun()
+
+# 搜索结果
+if search and len(search) >= 1 and stock_list is not None and not stock_list.empty:
+    mask = stock_list["code"].str.contains(search, na=False) | stock_list["name"].str.contains(search, na=False)
+    matches = stock_list[mask].head(10)
+    if not matches.empty:
+        options = [f"{r['code']} — {r['name']}" for _, r in matches.iterrows()]
+        sel = st.selectbox("匹配结果", options, key="ms")
+        if st.button("✅ 加入持仓", key="add_sel"):
+            if sel:
+                parts = sel.replace(chr(0x2014), '|').split('|')
+                c, n = parts[0].strip(), parts[1].strip()
+                st.session_state.portfolio[c] = n
+                st.rerun()
+    else:
+        st.caption("无匹配")
+
+# 当前持仓标签
+if st.session_state.portfolio:
+    st.markdown("**持仓列表：**")
+    tags = st.columns(min(8, len(st.session_state.portfolio)))
+    del_code = None
+    for i, (code, name) in enumerate(list(st.session_state.portfolio.items())):
+        with tags[i % 8]:
+            if st.button(f"✕ {name}", key=f"tag_{code}", help=f"删除 {code}"):
+                del_code = code
+    if del_code:
+        del st.session_state.portfolio[del_code]
+        st.rerun()
+
+st.divider()
+
+# ============================================================
+# 分析区
+# ============================================================
+portfolio = st.session_state.portfolio
+if not portfolio:
+    st.warning("请先添加上方添加持仓股")
+    st.stop()
+
+stock_names = [f"{name}({code})" for code, name in portfolio.items()]
+selected = st.selectbox("选择持仓股", stock_names)
+selected_code = selected.split("(")[1].rstrip(")")
+selected_name = selected.split("(")[0]
+
+# ============================================================
+# 📄 生成HTML研报按钮
+# ============================================================
+col_btn1, col_btn2 = st.columns([1, 5])
+with col_btn1:
+    if st.button("📄 生成HTML研报", type="primary", use_container_width=True):
+        with st.spinner(f"正在生成 {selected_name} 研报..."):
+            try:
+                import generate_report as gr
+                
+                rt = df_.get_stock_realtime(selected_code)
+                fin_data = df_.get_stock_financial(selected_code)
+                kdf = df_.get_stock_kline(selected_code, days=120)
+                
+                pred = {}
+                sr = {}
+                trend = {}
+                if not kdf.empty:
+                    kdf = anl.calc_all_indicators(kdf)
+                    pred = anl.predict_next_day(kdf)
+                    sr = anl.calc_stop_loss_take_profit(kdf, "中等")
+                    trend = anl.classify_trend(kdf)
+                
+                data = {
+                    'price': rt.get('price', 0) if rt else 0,
+                    'change_pct': rt.get('change_pct', 0) if rt else 0,
+                    'pe': rt.get('pe', 0) if rt else 0,
+                    'pb': rt.get('pb', 0) if rt else 0,
+                    'total_mv': rt.get('total_mv', 0) if rt else 0,
+                    'financial': fin_data or {},
+                    'prediction': pred,
+                    'stop_loss_take_profit': sr,
+                    'trend': trend,
+                }
+                
+                html = gr.generate_html_report(selected_code, selected_name, data)
+                filepath = gr.save_report(selected_code, selected_name, html)
+                
+                st.success(f"✅ 研报已生成！")
+                st.info(f"📁 文件：{filepath}")
+                
+                with open(filepath, "r", encoding="utf-8") as f:
+                    html_content = f.read()
+                st.download_button(
+                    label="📥 下载HTML研报",
+                    data=html_content,
+                    file_name=f"个股研究-{selected_name}.html",
+                    mime="text/html",
+                )
+            except Exception as e:
+                st.error(f"生成失败：{e}")
+
+with col_btn2:
+    st.caption("生成完整的HTML深度研报，可直接在浏览器打开")
+
+st.divider()
+
+# 快速切换
+if len(portfolio) > 1:
+    cols_tabs = st.columns(len(portfolio))
+    for i, (code, name) in enumerate(portfolio.items()):
+        with cols_tabs[i]:
+            if st.button(f"{name}", key=f"tab_{code}", use_container_width=True,
+                         type="primary" if code == selected_code else "secondary"):
+                st.session_state._selected_holding = code
+                st.rerun()
+
+# ============================================================
+# ⭐ 结论卡片
+# ============================================================
+with st.container():
+    st.markdown("---")
+    
+    rt = st.session_state.get("_realtime_cache", {}).get(selected_code, {})
+    if not rt:
+        with st.spinner("加载实时数据..."):
+            rt = df_.get_stock_realtime(selected_code)
+            if rt:
+                if "_realtime_cache" not in st.session_state:
+                    st.session_state._realtime_cache = {}
+                st.session_state._realtime_cache[selected_code] = rt
+    
+    cached = st.session_state.get("_dragon_analyzed", {}).get(selected_code, {})
+    if cached:
+        pred = cached.get("pred", {})
+        sr = cached.get("sr", {})
+    else:
+        kdf = df_.get_stock_kline(selected_code, days=120)
+        pred = {}
+        sr = {}
+        if not kdf.empty:
+            kdf = anl.calc_all_indicators(kdf)
+            pred = anl.predict_next_day(kdf)
+            sr = anl.calc_stop_loss_take_profit(kdf, "中等")
+    
+    fin_data = dm.load_local(f"stock_{selected_code}_fin.json")
+    if not fin_data:
+        fin_data = df_.get_stock_financial(selected_code)
+    
+    eps = fin_data.get('eps', 0) if fin_data else 0
+    bps = fin_data.get('bps', 0) if fin_data else 0
+    
+    if rt and rt.get("price"):
+        price = rt.get("price", 0)
+        pct = rt.get("change_pct", 0)
+        
+        if price and eps and eps > 0:
+            pe = price / eps
+        else:
+            pe = 0
+        if price and bps and bps > 0:
+            pb = price / bps
+        else:
+            pb = 0
+        
+        direction = pred.get("direction", "—")
+        confidence = pred.get("confidence", 0)
+        stop_loss = sr.get("stop_loss_tight", "—")
+        take_profit = sr.get("take_profit_1", "—")
+        
+        fin_score = 50
+        if fin_data and fin_data.get("roe"):
+            roe = fin_data.get("roe", 0)
+            fin_score = min(100, max(0, roe * 5 + 30))
+        tech_score = 50 + pred.get("score", 0) * 10
+        total_score = (fin_score + tech_score) / 2
+        
+        if total_score >= 70:
+            risk_level = "🟢 低风险"
+        elif total_score >= 50:
+            risk_level = "🟡 中风险"
+        else:
+            risk_level = "🔴 高风险"
+        
+        try:
+            if stop_loss != "—" and take_profit != "—":
+                down_risk = (price - float(stop_loss)) / price * 100 if price > 0 else 0
+                up_reward = (float(take_profit) - price) / price * 100 if price > 0 else 0
+                reward_ratio = up_reward / down_risk if down_risk > 0 else 0
+                reward_str = f"{reward_ratio:.1f}:1"
+            else:
+                reward_str = "—"
+        except:
+            reward_str = "—"
+        
+        pe_pb_str = f"{pe:.1f}/{pb:.1f}" if pe and pb and pe > 0 and pb > 0 else "—"
+        
+        row1_col1, row1_col2, row1_col3, row1_col4 = st.columns(4)
+        row1_col1.metric("📊 当前价", f"{price:.2f}", delta=f"{pct:+.2f}%")
+        row1_col2.metric("🎯 预测方向", direction, delta=f"置信度 {confidence}%")
+        row1_col3.metric("📈 综合评分", f"{total_score:.0f}分")
+        row1_col4.metric("🛡️ 风险", risk_level)
+        
+        row2_col1, row2_col2, row2_col3, row2_col4 = st.columns(4)
+        row2_col1.metric("🛑 止损", f"¥{stop_loss}" if stop_loss != "—" else "—")
+        row2_col2.metric("🎯 止盈", f"¥{take_profit}" if take_profit != "—" else "—")
+        row2_col3.metric("⚖️ 盈亏比", reward_str)
+        row2_col4.metric("📊 PE/PB", pe_pb_str)
+    else:
+        row1_col1, row1_col2, row1_col3, row1_col4 = st.columns(4)
+        row1_col1.metric("📊 当前价", "—")
+        row1_col2.metric("🎯 预测方向", "—")
+        row1_col3.metric("📈 综合评分", "—")
+        row1_col4.metric("🛡️ 风险", "—")
+        
+        row2_col1, row2_col2, row2_col3, row2_col4 = st.columns(4)
+        row2_col1.metric("🛑 止损", "—")
+        row2_col2.metric("🎯 止盈", "—")
+        row2_col3.metric("⚖️ 盈亏比", "—")
+        row2_col4.metric("📊 PE/PB", "—")
+    
+    st.markdown("---")
+
+# === 基本面 ===
+st.subheader("📋 基本面数据")
+with st.spinner("正在获取基本面数据..."):
+    fin_data = df_.get_stock_financial(selected_code)
+
+realtime = st.session_state.get("_realtime_cache", {}).get(selected_code, {})
+
+col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+
+if realtime:
+    col_f1.metric("最新价", f"{realtime.get('price', 0):.2f}",
+                  delta=f"{realtime.get('change_pct', 0):+.2f}%" if realtime.get('change_pct') else None)
+    col_f2.metric("总市值", fmt_cn(realtime.get('total_mv', 0)) if realtime.get('total_mv') else "—")
+    col_f3.metric("动态PE", f"{realtime.get('pe', 0):.1f}" if realtime.get('pe') else "—")
+    col_f4.metric("市净率PB", f"{realtime.get('pb', 0):.2f}" if realtime.get('pb') else "—")
+
+if fin_data:
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric("营业总收入", fmt_cn(fin_data.get('revenue', 0)) if fin_data.get('revenue') else "—")
+    col_b.metric("净利润", fmt_cn(fin_data.get('net_profit', 0)) if fin_data.get('net_profit') else "—")
+    col_c.metric("ROE", f"{fin_data.get('roe', 0):.2f}%" if fin_data.get('roe') else "—")
+    col_d.metric("毛利率", f"{fin_data.get('gross_margin', 0):.2f}%" if fin_data.get('gross_margin') else "—")
+else:
+    st.info("无法获取基本面数据（非交易日正常）")
+
+st.divider()
+
+# === 公司画像 ===
+st.subheader("🏢 公司画像")
+
+col_profile1, col_profile2, col_profile3 = st.columns(3)
+
+with col_profile1:
+    st.markdown("**基本信息**")
+    st.caption(f"**名称**：{selected_name}")
+    st.caption(f"**代码**：{selected_code}")
+    st.caption(f"**最新价**：{realtime.get('price', 0):.2f}" if realtime else "—")
+    st.caption(f"**总市值**：{fmt_cn(realtime.get('total_mv', 0)) if realtime else '—'}")
+
+with col_profile2:
+    st.markdown("**估值指标**")
+    pe = realtime.get('pe', 0) if realtime else 0
+    pb = realtime.get('pb', 0) if realtime else 0
+    st.caption(f"**市盈率(PE)**：{pe:.1f}" if pe else "—")
+    st.caption(f"**市净率(PB)**：{pb:.2f}" if pb else "—")
+    eps = fin_data.get('eps', 0) if fin_data else 0
+    bps = fin_data.get('bps', 0) if fin_data else 0
+    st.caption(f"**每股收益(EPS)**：{eps:.4f}" if eps else "—")
+    st.caption(f"**每股净资产(BPS)**：{bps:.2f}" if bps else "—")
+
+with col_profile3:
+    st.markdown("**财务指标**")
+    roe = fin_data.get('roe', 0) if fin_data else 0
+    gross = fin_data.get('gross_margin', 0) if fin_data else 0
+    debt = fin_data.get('debt_ratio', 0) if fin_data else 0
+    st.caption(f"**ROE**：{roe:.2f}%" if roe else "—")
+    st.caption(f"**毛利率**：{gross:.2f}%" if gross else "—")
+    st.caption(f"**资产负债率**：{debt:.2f}%" if debt else "—")
+
+st.divider()
+
+# === 主营业务构成 ===
+st.subheader("📊 主营业务构成")
+with st.spinner("正在获取主营业务数据..."):
+    zygc_df = df_.get_stock_zygc(selected_code)
+
+if not zygc_df.empty:
+    st.dataframe(
+        zygc_df,
+        hide_index=True,
+        use_container_width=True,
+        height=300
+    )
+else:
+    st.info("暂无主营业务构成数据")
+
+st.divider()
+
+# === 股东结构 ===
+st.subheader("🏢 股东结构")
+col_top1, col_top2 = st.columns(2)
+
+with col_top1:
+    with st.spinner("正在获取十大股东..."):
+        top10_df = df_.get_stock_top10(selected_code)
+    if not top10_df.empty:
+        st.markdown("**十大股东**")
+        st.dataframe(
+            top10_df.head(10),
+            hide_index=True,
+            use_container_width=True,
+            height=300
+        )
+    else:
+        st.info("暂无十大股东数据")
+
+with col_top2:
+    with st.spinner("正在获取十大流通股东..."):
+        top10_free_df = df_.get_stock_top10_free(selected_code)
+    if not top10_free_df.empty:
+        st.markdown("**十大流通股东**")
+        st.dataframe(
+            top10_free_df.head(10),
+            hide_index=True,
+            use_container_width=True,
+            height=300
+        )
+    else:
+        st.info("暂无十大流通股东数据")
+
+st.divider()
+
+# === 机构研报 ===
+st.subheader("📄 机构研报")
+with st.spinner("正在获取机构研报..."):
+    research_df = df_.get_stock_research(selected_code)
+
+if not research_df.empty:
+    display_df = research_df.head(10)
+    for _, row in display_df.iterrows():
+        title = row.get("研报标题", "")
+        org = row.get("机构名称", "")
+        date = row.get("报告日期", "")
+        rating = row.get("评级", "")
+        target = row.get("目标价", "")
+        
+        if not rating and not target:
+            st.markdown(f"""
+            <div style="background:#1E293B;border-radius:6px;padding:8px 12px;margin:4px 0;border-left:3px solid #FFD700;">
+                <div style="color:#F1F5F9;font-size:14px;">{title}</div>
+                <div style="color:#94A3B8;font-size:12px;">{org} | {date}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            rating_color = "#DC143C" if "买入" in str(rating) else "#FFD700" if "增持" in str(rating) else "#94A3B8"
+            st.markdown(f"""
+            <div style="background:#1E293B;border-radius:6px;padding:8px 12px;margin:4px 0;border-left:3px solid {rating_color};">
+                <div style="color:#F1F5F9;font-size:14px;">{title}</div>
+                <div style="color:#94A3B8;font-size:12px;">{org} | {date} | 评级：<span style="color:{rating_color};">{rating}</span> | 目标价：{target}</div>
+            </div>
+            """, unsafe_allow_html=True)
+else:
+    st.info("暂无机构研报数据")
+
+st.divider()
+
+# === 个股新闻 ===
+st.subheader("📰 个股新闻")
+with st.spinner("正在获取个股新闻..."):
+    news_df = df_.get_stock_news(selected_code)
+
+if not news_df.empty:
+    display_df = news_df.head(10)
+    for _, row in display_df.iterrows():
+        title = row.get("新闻标题", "") or row.get("title", "") or row.get("标题", "") or row.get("content", "")
+        date = row.get("发布时间", "") or row.get("time", "") or row.get("日期", "") or row.get("date", "")
+        
+        if title and len(str(title)) > 5:
+            st.markdown(f"""
+            <div style="background:#1E293B;border-radius:6px;padding:6px 12px;margin:3px 0;">
+                <span style="color:#E2E8F0;font-size:13px;">{title[:80]}{'...' if len(str(title)) > 80 else ''}</span>
+                <span style="color:#64748B;font-size:11px;margin-left:12px;">{date}</span>
+            </div>
+            """, unsafe_allow_html=True)
+else:
+    st.info("暂无个股新闻数据")
+
+st.divider()
+
+# === 分红与解禁 ===
+st.subheader("💰 分红与解禁")
+col_div1, col_div2, col_div3 = st.columns(3)
+
+with col_div1:
+    with st.spinner("获取分红数据..."):
+        dividend_df = df_.get_stock_dividend(selected_code)
+    if not dividend_df.empty:
+        st.markdown("**历史分红**")
+        st.dataframe(
+            dividend_df.head(10),
+            hide_index=True,
+            use_container_width=True,
+            height=200
+        )
+    else:
+        st.info("暂无分红数据")
+
+with col_div2:
+    with st.spinner("获取限售解禁..."):
+        release_df = df_.get_stock_release(selected_code)
+    if not release_df.empty:
+        st.markdown("**限售解禁**")
+        st.dataframe(
+            release_df.head(10),
+            hide_index=True,
+            use_container_width=True,
+            height=200
+        )
+    else:
+        st.info("暂无解禁数据")
+
+with col_div3:
+    with st.spinner("获取送转数据..."):
+        alloc_df = df_.get_stock_share_alloc(selected_code)
+    if not alloc_df.empty:
+        st.markdown("**历史送转**")
+        st.dataframe(
+            alloc_df.head(10),
+            hide_index=True,
+            use_container_width=True,
+            height=200
+        )
+    else:
+        st.markdown("**历史送转**")
+        st.info("暂无送转数据")
+
+st.divider()
+
+# === K线分析 + 技术指标 ===
+st.subheader("📈 K线分析与技术指标")
+with st.spinner("正在加载K线数据..."):
+    kline_df = df_.get_stock_kline(selected_code, days=120)
+
+if kline_df.empty:
+    st.error("无法获取K线数据")
+    st.stop()
+
+kline_df = anl.calc_all_indicators(kline_df)
+
+# 使用 ECharts K线图（支持缩放+拖动）
+kline_html = viz.plot_kline_echarts(
+    kline_df, 
+    title=f"{selected_name}({selected_code}) 日K线",
+    height=500
+)
+components.html(kline_html, height=530)
+
+# === 技术指标（ECharts，支持缩放） ===
+st.subheader("🔍 技术指标")
+indicator_tab = st.radio("选择指标", ["MACD", "KDJ", "RSI", "BOLL"], horizontal=True)
+
+indicator_html = viz.plot_indicator_echarts(kline_df, indicator_tab, height=280)
+components.html(indicator_html, height=310)
+
+# 趋势研判（保留）
+trend = anl.classify_trend(kline_df)
+cols_t = st.columns(4)
+cols_t[0].info(f"**短期**\n{trend.get('short_signal', '—')}")
+cols_t[1].info(f"**中期**\n{trend.get('mid_signal', '—')}")
+cols_t[2].info(f"**MACD**\n{trend.get('macd_signal', '—')}")
+
+patterns = anl.detect_patterns(kline_df)
+if patterns:
+    cols_t[3].warning(f"**K线形态**\n" + "\n".join(patterns))
+else:
+    cols_t[3].info("**K线形态**\n无明显形态")
+
+st.divider()
+
+# === 多周期趋势 ===
+st.subheader("📊 多周期趋势")
+
+def calc_multi_period_trend(df: pd.DataFrame) -> dict:
+    """计算多周期趋势"""
+    if df.empty:
+        return {}
+    
+    close = df["close"]
+    latest = close.iloc[-1]
+    
+    ma5 = close.tail(5).mean()
+    ma10 = close.tail(10).mean()
+    ma20 = close.tail(20).mean()
+    ma60 = close.tail(60).mean() if len(close) >= 60 else close.mean()
+    
+    if ma5 > ma20:
+        short = "🟢 多头"
+        short_detail = f"MA5({ma5:.2f}) > MA20({ma20:.2f})"
+    elif ma5 < ma20:
+        short = "🔴 空头"
+        short_detail = f"MA5({ma5:.2f}) < MA20({ma20:.2f})"
+    else:
+        short = "🟡 震荡"
+        short_detail = "MA5 ≈ MA20"
+    
+    if ma20 > ma60:
+        mid = "🟢 多头"
+        mid_detail = f"MA20({ma20:.2f}) > MA60({ma60:.2f})"
+    elif ma20 < ma60:
+        mid = "🔴 空头"
+        mid_detail = f"MA20({ma20:.2f}) < MA60({ma60:.2f})"
+    else:
+        mid = "🟡 震荡"
+        mid_detail = "MA20 ≈ MA60"
+    
+    if latest > ma60:
+        long = "🟢 多头"
+        long_detail = f"当前价({latest:.2f}) > MA60({ma60:.2f})"
+    elif latest < ma60:
+        long = "🔴 空头"
+        long_detail = f"当前价({latest:.2f}) < MA60({ma60:.2f})"
+    else:
+        long = "🟡 震荡"
+        long_detail = "当前价 ≈ MA60"
+    
+    return {
+        "short": short,
+        "short_detail": short_detail,
+        "mid": mid,
+        "mid_detail": mid_detail,
+        "long": long,
+        "long_detail": long_detail,
+        "ma5": ma5,
+        "ma10": ma10,
+        "ma20": ma20,
+        "ma60": ma60,
+        "latest": latest,
+    }
+
+
+trend_data = calc_multi_period_trend(kline_df)
+
+if trend_data:
+    cols_trend = st.columns(3)
+    
+    with cols_trend[0]:
+        short_color = "#DC143C" if "多头" in trend_data["short"] else "#228B22" if "空头" in trend_data["short"] else "#FFD700"
+        st.markdown(f"""
+        <div style="background:#1E293B;border-radius:8px;padding:12px 16px;border-left:3px solid {short_color};">
+            <div style="font-size:11px;color:#94A3B8;">📆 短期 (5日 vs 20日)</div>
+            <div style="font-size:18px;font-weight:700;color:{short_color};">{trend_data['short']}</div>
+            <div style="font-size:11px;color:#64748B;">{trend_data['short_detail']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with cols_trend[1]:
+        mid_color = "#DC143C" if "多头" in trend_data["mid"] else "#228B22" if "空头" in trend_data["mid"] else "#FFD700"
+        st.markdown(f"""
+        <div style="background:#1E293B;border-radius:8px;padding:12px 16px;border-left:3px solid {mid_color};">
+            <div style="font-size:11px;color:#94A3B8;">📅 中期 (20日 vs 60日)</div>
+            <div style="font-size:18px;font-weight:700;color:{mid_color};">{trend_data['mid']}</div>
+            <div style="font-size:11px;color:#64748B;">{trend_data['mid_detail']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with cols_trend[2]:
+        long_color = "#DC143C" if "多头" in trend_data["long"] else "#228B22" if "空头" in trend_data["long"] else "#FFD700"
+        st.markdown(f"""
+        <div style="background:#1E293B;border-radius:8px;padding:12px 16px;border-left:3px solid {long_color};">
+            <div style="font-size:11px;color:#94A3B8;">📈 长期 (当前价 vs MA60)</div>
+            <div style="font-size:18px;font-weight:700;color:{long_color};">{trend_data['long']}</div>
+            <div style="font-size:11px;color:#64748B;">{trend_data['long_detail']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.divider()
+
+# === 明日预测 ===
+st.subheader("🔮 明日预测")
+prediction = anl.predict_next_day(kline_df)
+
+col_p1, col_p2, col_p3 = st.columns(3)
+col_p1.metric("预测方向", prediction.get("direction", "—"))
+col_p2.metric("置信度", f"{prediction.get('confidence', 0)}%")
+col_p3.metric("波动区间", prediction.get("range", "—"))
+
+fig_pred = viz.plot_prediction_range(kline_df, prediction)
+st.plotly_chart(fig_pred, use_container_width=True)
+
+st.info(f"**综合评分：{prediction.get('score', 0)}分**")
+if prediction.get("reasons"):
+    st.write("**判断依据：**")
+    for r in prediction["reasons"]:
+        st.caption(f"  • {r}")
+
+# === 止盈止损 + 仓位 ===
+st.divider()
+st.subheader("🎯 止盈止损 & 仓位建议")
+
+risk_tolerance = st.select_slider("风险偏好", ["保守", "中等", "激进"], value="中等")
+sl_tp = anl.calc_stop_loss_take_profit(kline_df, risk_tolerance)
+
+if sl_tp:
+    col_stop, col_take = st.columns(2)
+    with col_stop:
+        st.error(f"**🛑 止损位（严格）**：¥{sl_tp.get('stop_loss_tight', '—')}")
+        st.warning(f"**🛑 止损位（宽松）**：¥{sl_tp.get('stop_loss_loose', '—')}")
+    with col_take:
+        st.success(f"**🎯 止盈位 1**：¥{sl_tp.get('take_profit_1', '—')}")
+        st.success(f"**🎯 止盈位 2**：¥{sl_tp.get('take_profit_2', '—')}")
+        st.success(f"**🎯 止盈位 3**：¥{sl_tp.get('take_profit_3', '—')}")
+
+    st.metric("💼 建议仓位", sl_tp.get("suggested_position", "—"))
+    st.caption(f"ATR(14)：{sl_tp.get('atr', 0)} | 风险偏好：{sl_tp.get('risk_tolerance', '—')}")
+
+# === 风险分析清单 ===
+st.subheader("⚠️ 风险分析清单")
+
+risks = []
+
+# 1. 估值风险
+pe = realtime.get('pe', 0) if realtime else 0
+if pe > 50:
+    risks.append({"level": "🔴 高", "item": f"PE({pe:.1f}) > 50，估值偏贵", "detail": "历史高位区间"})
+elif pe > 30:
+    risks.append({"level": "🟡 中", "item": f"PE({pe:.1f}) 处于中高位", "detail": "需业绩增长消化估值"})
+else:
+    risks.append({"level": "🟢 低", "item": f"PE({pe:.1f}) 估值合理", "detail": "有安全边际"})
+
+# 2. 均线风险
+if trend_data:
+    if "空头" in trend_data["short"] and "空头" in trend_data["mid"]:
+        risks.append({"level": "🔴 高", "item": "短期+中期均线空头排列", "detail": "技术面偏弱，注意风险"})
+    elif "空头" in trend_data["short"]:
+        risks.append({"level": "🟡 中", "item": "短期均线空头排列", "detail": "短期可能继续调整"})
+    else:
+        risks.append({"level": "🟢 低", "item": "均线多头排列", "detail": "技术面偏多"})
+
+# 3. 波动风险
+if not kline_df.empty:
+    atr = (kline_df["high"] - kline_df["low"]).tail(20).mean()
+    if atr and atr / kline_df["close"].iloc[-1] > 0.1:
+        risks.append({"level": "🟡 中", "item": f"近期振幅较大 ({atr/kline_df['close'].iloc[-1]*100:.1f}%)", "detail": "短期波动风险"})
+    else:
+        risks.append({"level": "🟢 低", "item": "波动率正常", "detail": "价格相对稳定"})
+
+# 4. 成交量异常
+avg_vol = kline_df['volume'].tail(20).mean() if not kline_df.empty else 0
+latest_vol = kline_df['volume'].iloc[-1] if not kline_df.empty else 0

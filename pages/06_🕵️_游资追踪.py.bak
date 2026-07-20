@@ -1,0 +1,140 @@
+"""
+页面6：游资追踪 — 近5日交易 + 操作风格 + 明日预判
+"""
+
+import streamlit as st
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import config as cfg
+from utils.formatters import fmt_dataframe
+from utils.helpers import fmt_cn
+import data_fetcher as df_
+import visualizer as viz
+import pandas as pd
+
+st.set_page_config(page_title="游资追踪", page_icon="🕵️", layout="wide")
+
+st.title("🕵️ 游资龙虎榜追踪")
+st.caption(f"数据更新时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+
+# 游资操作数据 - 使用下拉选择
+days_options = [5, 10, 15, 20, 25, 30]
+selected_days = st.selectbox("统计天数", options=days_options, index=1)  # 默认10天
+
+with st.spinner(f"正在获取龙虎榜数据（近{selected_days}日）..."):
+    hot_df = df_.get_hot_money_trades(days=selected_days)
+
+if hot_df.empty:
+    st.warning(f"近{selected_days}日未发现目标游资交易记录，或数据源暂时不可用。")
+    st.info("""
+    **可能原因：**
+    1. 近期非交易日（周末/节假日）
+    2. 目标游资近5日未上榜
+    3. 数据源延迟更新
+    
+    请尝试在工作日收盘后查看。
+    """)
+    st.stop()
+
+# 游资汇总图
+st.subheader("📊 游资近5日买卖汇总")
+fig_summary = viz.plot_hot_money_summary(hot_df)
+st.plotly_chart(fig_summary, use_container_width=True)
+
+# 筛选游资
+available_hot = hot_df["hot_money_name"].unique().tolist()
+selected_hot = st.multiselect("筛选游资", available_hot, default=available_hot[:5])
+
+if selected_hot:
+    filtered_df = hot_df[hot_df["hot_money_name"].isin(selected_hot)]
+else:
+    filtered_df = hot_df
+
+st.subheader("📋 游资交易明细")
+st.dataframe(
+    fmt_dataframe(filtered_df[["trade_date", "hot_money_name", "交易营业部名称", "股票名称", "股票代码",
+                 "买入金额", "卖出金额", "净额"]]),
+    hide_index=True, use_container_width=True,
+    height=500,
+)
+
+# 每个游资详细分析
+st.subheader("🔍 游资操作风格分析")
+
+for name in selected_hot[:5] if selected_hot else available_hot[:5]:
+    name_df = hot_df[hot_df["hot_money_name"] == name]
+
+    with st.expander(f"🕵️ {name} — 近5日操作（{len(name_df)}笔）", expanded=(name == (selected_hot[0] if selected_hot else available_hot[0]))):
+        total_buy = name_df["买入金额"].sum() if "买入金额" in name_df.columns else 0
+        total_sell = name_df["卖出金额"].sum() if "卖出金额" in name_df.columns else 0
+        net = total_buy - total_sell
+
+        cols = st.columns(4)
+        cols[0].metric("操作笔数", len(name_df))
+        cols[1].metric("累计买入", fmt_cn(total_buy) if total_buy else "0")
+        cols[2].metric("累计卖出", fmt_cn(total_sell) if total_sell else "0")
+        cols[3].metric("净买入", fmt_cn(net) if net else "0",
+                       delta="净额" if net > 0 else "净卖出" if net < 0 else "平衡")
+
+        st.dataframe(
+            fmt_dataframe(name_df[["trade_date", "股票名称", "股票代码", "买入金额", "卖出金额", "净额"]]),
+            hide_index=True, use_container_width=True,
+        )
+
+        stock_list = name_df["股票名称"].unique()
+        st.caption(f"**操作标的：**{', '.join(stock_list.tolist())}")
+
+        if net > 10000:
+            st.success("🟢 整体偏激进买入，看好后市")
+        elif net < -10000:
+            st.error("🔴 整体偏卖出，注意风险")
+        else:
+            st.info("🟡 买卖平衡，短线调仓")
+
+st.divider()
+
+# 明日游资预测
+st.subheader("🔮 游资明日操作预测")
+
+st.info("""
+**预测逻辑：** 基于游资近5日的操作方向、仓位变化和标的特征，推断明日可能的方向。
+
+> ⚠️ 游资操作具有高度不确定性，以下仅为基于历史数据的推演，不构成投资建议。
+""")
+
+for name in selected_hot[:6] if selected_hot else available_hot[:6]:
+    name_df = hot_df[hot_df["hot_money_name"] == name]
+
+    total_buy = name_df["买入金额"].sum() if "买入金额" in name_df.columns else 0
+    total_sell = name_df["卖出金额"].sum() if "卖出金额" in name_df.columns else 0
+    net = total_buy - total_sell
+
+    days_active = name_df["trade_date"].nunique()
+
+    if days_active >= 3 and net > 5000:
+        pred = "📈 活跃做多，预计继续加仓热门题材"
+        pred_detail = "操作频率高+净买入，游资看多情绪明显"
+    elif net > 0:
+        pred = "📈 偏多，可能逢低加仓"
+        pred_detail = "净买入但操作频率中等，较为谨慎"
+    elif net < 0 and days_active >= 2:
+        pred = "📉 减仓为主，明日可能继续出货"
+        pred_detail = "连续净卖出，游资正在撤退"
+    elif days_active == 0:
+        pred = "😴 近5日无操作，可能在观望"
+        pred_detail = "该游资近期不活跃，等待机会"
+    else:
+        pred = "🔄 短线调仓，操作方向不明确"
+        pred_detail = "买卖基本平衡，属于正常换手"
+
+    st.write(f"**{name}**：{pred}")
+    st.caption(f"  {pred_detail}")
+
+st.divider()
+st.subheader("📌 游资席位参考")
+st.caption("以下为知名游资常用席位（用于龙虎榜匹配）：")
+
+for name, seats in cfg.HOT_MONEY_SEATS.items():
+    st.write(f"**{name}**：{' / '.join(seats)}")

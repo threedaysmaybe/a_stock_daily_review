@@ -1,0 +1,56 @@
+import time
+import akshare as ak
+
+def _to_float(s):
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+def get_stock_fund_flow_with_retry(code: str) -> dict:
+    """获取个股资金流向（带重试）"""
+    code = str(code).zfill(6)
+    
+    max_retries = 3
+    backoff = [0.5, 1.5, 3.0]
+    
+    for attempt in range(max_retries + 1):
+        try:
+            print(f"尝试 {attempt + 1}/{max_retries + 1}...")
+            df = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith("6") else "sz")
+            if df is not None and not df.empty:
+                latest = df.iloc[-1]
+                print(f"✅ 成功！")
+                return {
+                    "date": str(latest.get("日期", "")),
+                    "main_net_inflow": _to_float(latest.get("主力净流入", 0)),
+                    "main_net_pct": _to_float(latest.get("主力净流入占比", 0)),
+                    "super_large_net": _to_float(latest.get("超大单净流入", 0)),
+                    "large_net": _to_float(latest.get("大单净流入", 0)),
+                    "mid_net": _to_float(latest.get("中单净流入", 0)),
+                    "small_net": _to_float(latest.get("小单净流入", 0)),
+                }
+            else:
+                print("❌ 返回空数据")
+                return {}
+        except Exception as e:
+            if attempt < max_retries:
+                print(f"失败: {e}，{backoff[attempt]}秒后重试...")
+                time.sleep(backoff[attempt])
+                continue
+            else:
+                print(f"❌ 失败，已重试 {max_retries} 次: {e}")
+                return {}
+    
+    return {}
+
+if __name__ == "__main__":
+    code = "600176"
+    print(f"测试个股资金流向: {code}")
+    print("=" * 50)
+    result = get_stock_fund_flow_with_retry(code)
+    if result:
+        for k, v in result.items():
+            print(f"  {k}: {v}")
+    else:
+        print("❌ 获取失败")
