@@ -24,7 +24,7 @@ import data_manager as dm
 
 st.set_page_config(
     page_title="每日A股复盘",
-    page_icon="stock.ico",  #📊
+    page_icon="📊",  # ✅ 换成 emoji
     layout="wide",
     initial_sidebar_state="expanded",
 )
