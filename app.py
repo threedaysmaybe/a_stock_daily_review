@@ -17,6 +17,9 @@ import json
 import base64
 from datetime import datetime
 
+# ============================================================
+# 导入自定义模块
+# ============================================================
 import config as cfg
 import data_fetcher as df_
 import analyzer as anl
@@ -24,81 +27,36 @@ import visualizer as viz
 import data_manager as dm
 
 # ============================================================
-# 读取并编码图标（base64内联）
-# ============================================================
-def get_icon_base64():
-    """读取 stock.ico 并转为 base64 编码"""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # 优先使用 PNG（手机主屏幕兼容性更好）
-    png_path = os.path.join(base_dir, "stock.png")
-    ico_path = os.path.join(base_dir, "stock.ico")
-    
-    if os.path.exists(png_path):
-        with open(png_path, "rb") as f:
-            return base64.b64encode(f.read()).decode(), "image/png"
-    elif os.path.exists(ico_path):
-        with open(ico_path, "rb") as f:
-            return base64.b64encode(f.read()).decode(), "image/x-icon"
-    else:
-        # 如果都没有，返回 None
-        return None, None
-
-icon_b64, icon_type = get_icon_base64()
-
-# ============================================================
 # Streamlit 页面配置
 # ============================================================
 st.set_page_config(
     page_title="每日A股复盘",
-    page_icon="📊" if icon_b64 is None else f"data:{icon_type};base64,{icon_b64}",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ============================================================
-# 主屏幕图标（PWA / 添加到主屏幕）
+# 手机主屏幕图标（PNG 硬编码）
 # ============================================================
-if icon_b64:
-    # 如果是 PNG，用 PNG 的 MIME 类型；如果是 ICO，也尝试作为 PNG 显示（部分浏览器支持）
-    mime_type = "image/png" if icon_type == "image/png" else "image/x-icon"
-    
-    # 尝试用 stock.png（如果没有则用 stock.ico）
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    png_path = os.path.join(base_dir, "stock.png")
-    
-    if os.path.exists(png_path):
-        with open(png_path, "rb") as f:
-            icon_b64_png = base64.b64encode(f.read()).decode()
-            icon_data_uri = f"data:image/png;base64,{icon_b64_png}"
-    else:
-        icon_data_uri = f"data:{mime_type};base64,{icon_b64}"
-    
-    st.markdown(f"""
-    <!-- 主屏幕图标 (iOS/Android) -->
-    <link rel="apple-touch-icon" sizes="180x180" href="{icon_data_uri}">
-    <link rel="apple-touch-icon" sizes="152x152" href="{icon_data_uri}">
-    <link rel="apple-touch-icon" sizes="120x120" href="{icon_data_uri}">
-    <link rel="icon" type="image/png" sizes="192x192" href="{icon_data_uri}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{icon_data_uri}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{icon_data_uri}">
-    
-    <!-- PWA 配置 -->
-    <meta name="apple-mobile-web-app-title" content="A股复盘">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#0e1117">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-    <!-- 备用：如果图标文件不存在，使用 emoji -->
-    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
-    <meta name="apple-mobile-web-app-title" content="A股复盘">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="theme-color" content="#0e1117">
-    """, unsafe_allow_html=True)
+png_b64 = "iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAYAAAA9zQYyAAAAAXNSR0IArs4c6QAAAARzQklUCAgICHwIZAAAAAlwSFlzAAAOxAAADsQBlSsOGwAABTdJREFUeJzt3b9rFGUcB/Dv8+71LpIYSDCkUAhFW2jBmLaTg0PTQBcddHHwD3BwchR0EDoICq7+g4Oii6Cbg5OLIDhIhUAx0CC4xFBIUyhJ1AvJ3c3d876P93vnlS5JSC7v7nP3PfcB32d4873nnu/znr3nnu+3AIC/rFdbAAAAGIEALYAAAVAaQIEALQEKoIUAzksAIIuDg6YoEABorEGDEiCgNIIIiICIAMmIi5mIiJm5AABmMxERMzMREQPGDAQQMxMAxKxBAUGjBgQNmgYFDBqGBAgIOBgAlFEHkogkInnVgSCKCIBJREwIWCbq0RZRDwQYiPq0iegDQQyiDkgYgrjtcLgR9ekS0TtBGKJOyKj9CQQRoJh6eB9mItoe7m2W1zAzEMQJYBD1wCBiBsrph5u8E6GJQWAKhJ4JAhNgLSTbw8MZtpcKxMCXQxSkDYIGoKCqLL9LAGmpN8paHSB4bG8DKw/onKAVa1ICDmTACLKKqwd0FvRRu69IxIF2DQjCgG+1C/ZA/b5e5dTj2KCxHL4Z57yHpykGgZBApBOPJntp4gQChBPm0kIaT8L3S1GiLkAAhAygFdoLz7aYq2E3Hgq8PKDLPgCB6RlVAYpAIK5fA7T7vVYdyA9q1GqlARlqZDC0W3nEGYDW+4DqQhJ5ANqPR+xUPqCns27/LS6bj9U2M1WPqEY8MFgGq4AURh6AWQW49sxsmHywM5mFpUxEEBEBKbEBbR1LZjaAOI8A9BLCWbmpK4Cd+RcBTuyt8fUc8ABz4Sx+2bmCty9epmPJJAJBCPXh7pJzQCPSjTjVSMMx17iYOAi7n1U8zCY2oH4ePnGWItKAQCigYQVs3ECvNal32gON+HH+GEKgMYR4DJDm/BFrsF6X7m56vW2KB8wXl3j9yzzCbIbjETMAk3SYzvVj2akHYiJmzpeRw+2P4pqZAwYzCbMxExHLF+SDedMAMwjh+4dm8Mkkq90m8/AN3uH4kZc3/IEsJoK9cIErmUnSmIQAAgAIM5NIpuUxAQEAAAAAAAAAUKrJD0o8vQH8rxq1gQd/KQUNUArkgbpAw7BqAAEVGgp3IYgEKMDTCxTkkyM0KADiUIMoaBAUs2VBOkAgjfouklBAjfKJt1Z4dAYgKzCg1Y0/Ub3u/7sL3qrySEwm5BSBWdAv7N3mB+0HdHk5AgAx9LgdBW23tNcQrH5v9p2pXaM9txsp4m6GC0i4fIfsB7r9Bp4/lpcQW9s9ryMWAkxCHZPqUZn9AHT8AUCFGJSCmhhAmqYBEpAQURK1t0FpACAKCiUACAZBNoCoYHlQEgBQBiAkgKJS9e1IAFgBCEhALiAJAgCUiOUZxQKyAclZBuR1DYiBAcD6rR2lT0MAzE+IgMREZMPGiwN/B0AIKt3cCgMqADWmBEFQSfTLt7h2vIR/y3OIVB0NEwlIeWwpYF1Wx2lVFQs0jUBm0icvt2l5sMDiwiJLl32JwBwlqQCItFcPxDDmmTQDxByHqoqi5YVM1Gq91aI9c1HLtIhWWjRbS2iGmX22bj9A7V5QjduPHEG5OxrFASLrdM1R8zS/BOQD9D+H/pa+xcIPUBJQJD17tEV8eY4Pnj4jDprQYKqUziU3M8gKfVp8qyHshlMWEaqU7qW8ZmCmiX8vR2BmA4CpDAQMUwFJSaPkllsCsBjvYALMQkQEFCAgZkJABGgAoCFOSgEACMB/4h/JApxJ6OMxjwAAAABJRU5ErkJggg=="
+
+st.markdown(f"""
+<!-- 手机主屏幕图标 - iOS -->
+<link rel="apple-touch-icon" sizes="180x180" href="data:image/png;base64,{png_b64}">
+<link rel="apple-touch-icon" sizes="152x152" href="data:image/png;base64,{png_b64}">
+<link rel="apple-touch-icon" sizes="120x120" href="data:image/png;base64,{png_b64}">
+
+<!-- 手机主屏幕图标 - Android -->
+<link rel="icon" type="image/png" sizes="192x192" href="data:image/png;base64,{png_b64}">
+<link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,{png_b64}">
+
+<!-- PWA 配置 -->
+<meta name="apple-mobile-web-app-title" content="A股复盘">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a73e8">
+""", unsafe_allow_html=True)
 
 # ============================================================
 # 加载持仓（本地优先）
