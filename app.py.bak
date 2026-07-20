@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 import os
 import json
+import base64
 from datetime import datetime
 
 import config as cfg
@@ -22,19 +23,88 @@ import analyzer as anl
 import visualizer as viz
 import data_manager as dm
 
+# ============================================================
+# 读取并编码图标（base64内联）
+# ============================================================
+def get_icon_base64():
+    """读取 stock.ico 并转为 base64 编码"""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 优先使用 PNG（手机主屏幕兼容性更好）
+    png_path = os.path.join(base_dir, "stock.png")
+    ico_path = os.path.join(base_dir, "stock.ico")
+    
+    if os.path.exists(png_path):
+        with open(png_path, "rb") as f:
+            return base64.b64encode(f.read()).decode(), "image/png"
+    elif os.path.exists(ico_path):
+        with open(ico_path, "rb") as f:
+            return base64.b64encode(f.read()).decode(), "image/x-icon"
+    else:
+        # 如果都没有，返回 None
+        return None, None
+
+icon_b64, icon_type = get_icon_base64()
+
+# ============================================================
+# Streamlit 页面配置
+# ============================================================
 st.set_page_config(
     page_title="每日A股复盘",
-    page_icon="📊",  # ✅ 换成 emoji
+    page_icon="📊" if icon_b64 is None else f"data:{icon_type};base64,{icon_b64}",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-# 添加主屏幕图标（iOS/Android）
-st.markdown("""
-<link rel="apple-touch-icon" sizes="180x180" href="https://img.icons8.com/color/96/000000/stock.png">
-<link rel="icon" type="image/png" sizes="32x32" href="https://img.icons8.com/color/48/000000/stock.png">
-<meta name="apple-mobile-web-app-title" content="A股复盘">
-<meta name="apple-mobile-web-app-capable" content="yes">
-""", unsafe_allow_html=True)
+
+# ============================================================
+# 主屏幕图标（PWA / 添加到主屏幕）
+# ============================================================
+if icon_b64:
+    # 如果是 PNG，用 PNG 的 MIME 类型；如果是 ICO，也尝试作为 PNG 显示（部分浏览器支持）
+    mime_type = "image/png" if icon_type == "image/png" else "image/x-icon"
+    
+    # 尝试用 stock.png（如果没有则用 stock.ico）
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    png_path = os.path.join(base_dir, "stock.png")
+    
+    if os.path.exists(png_path):
+        with open(png_path, "rb") as f:
+            icon_b64_png = base64.b64encode(f.read()).decode()
+            icon_data_uri = f"data:image/png;base64,{icon_b64_png}"
+    else:
+        icon_data_uri = f"data:{mime_type};base64,{icon_b64}"
+    
+    st.markdown(f"""
+    <!-- 主屏幕图标 (iOS/Android) -->
+    <link rel="apple-touch-icon" sizes="180x180" href="{icon_data_uri}">
+    <link rel="apple-touch-icon" sizes="152x152" href="{icon_data_uri}">
+    <link rel="apple-touch-icon" sizes="120x120" href="{icon_data_uri}">
+    <link rel="icon" type="image/png" sizes="192x192" href="{icon_data_uri}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{icon_data_uri}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{icon_data_uri}">
+    
+    <!-- PWA 配置 -->
+    <meta name="apple-mobile-web-app-title" content="A股复盘">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0e1117">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    
+    <style>
+        /* 确保图标在加载时正确显示 */
+        .stApp {{
+            background-color: #0e1117;
+        }}
+    </style>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <!-- 备用：如果图标文件不存在，使用 emoji -->
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+    <meta name="apple-mobile-web-app-title" content="A股复盘">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#0e1117">
+    """, unsafe_allow_html=True)
 
 # ============================================================
 # 加载持仓（本地优先）
@@ -84,7 +154,7 @@ has_data = dm.has_data_today()
 latest = dm.get_latest_date()
 
 if has_data:
-    st.sidebar.success(f"✅ 今日已更新")
+    st.sidebar.success("✅ 今日已更新")
 else:
     delta = ""
     if latest:

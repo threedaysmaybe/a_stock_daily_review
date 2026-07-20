@@ -90,12 +90,6 @@ if icon_b64:
     <meta name="theme-color" content="#0e1117">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     
-    <style>
-        /* 确保图标在加载时正确显示 */
-        .stApp {{
-            background-color: #0e1117;
-        }}
-    </style>
     """, unsafe_allow_html=True)
 else:
     st.markdown("""
