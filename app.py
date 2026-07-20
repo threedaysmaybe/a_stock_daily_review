@@ -24,11 +24,17 @@ import data_manager as dm
 
 st.set_page_config(
     page_title="每日A股复盘",
-    page_icon="📈",
+    page_icon="stock.ico",  #📊
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
+# 添加主屏幕图标（iOS/Android）
+st.markdown("""
+<link rel="apple-touch-icon" sizes="180x180" href="https://img.icons8.com/color/96/000000/stock.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://img.icons8.com/color/48/000000/stock.png">
+<meta name="apple-mobile-web-app-title" content="A股复盘">
+<meta name="apple-mobile-web-app-capable" content="yes">
+""", unsafe_allow_html=True)
 
 # ============================================================
 # 加载持仓（本地优先）

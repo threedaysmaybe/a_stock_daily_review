@@ -13,19 +13,43 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import json
 from datetime import datetime
 
 import config as cfg
 import data_fetcher as df_
 import analyzer as anl
 import visualizer as viz
+import data_manager as dm
 
 st.set_page_config(
     page_title="每日A股复盘",
-    page_icon="📈",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+# 添加主屏幕图标（iOS/Android）
+st.markdown("""
+<link rel="apple-touch-icon" sizes="180x180" href="https://img.icons8.com/color/96/000000/stock.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://img.icons8.com/color/48/000000/stock.png">
+<meta name="apple-mobile-web-app-title" content="A股复盘">
+<meta name="apple-mobile-web-app-capable" content="yes">
+""", unsafe_allow_html=True)
+
+# ============================================================
+# 加载持仓（本地优先）
+# ============================================================
+def load_portfolio() -> dict:
+    _PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "portfolio.json")
+    _portfolio = dict(cfg.PORTFOLIO)
+    if os.path.exists(_PORTFOLIO_FILE):
+        try:
+            with open(_PORTFOLIO_FILE, "r", encoding="utf-8") as _f:
+                _portfolio = json.load(_f)
+        except Exception:
+            pass
+    return _portfolio
+
 
 # ============================================================
 # 侧边栏
@@ -56,8 +80,6 @@ st.sidebar.markdown("---")
 # ============================================================
 st.sidebar.markdown("### 📦 数据状态")
 
-import data_manager as dm
-
 has_data = dm.has_data_today()
 latest = dm.get_latest_date()
 
@@ -67,9 +89,8 @@ else:
     delta = ""
     if latest:
         try:
-            from datetime import datetime as _dt
-            latest_dt = _dt.strptime(latest, "%Y%m%d")
-            days_ago = (_dt.now() - latest_dt).days
+            latest_dt = datetime.strptime(latest, "%Y%m%d")
+            days_ago = (datetime.now() - latest_dt).days
             delta = f"（{days_ago}天前）"
         except Exception:
             pass
@@ -91,7 +112,9 @@ if st.sidebar.button("🔄 更新数据 & 重新分析", use_container_width=Tru
         progress_bar.empty()
         status_text.empty()
         if meta["ok"] > 0:
+            # 清除所有缓存
             st.cache_data.clear()
+            st.session_state._market_data_loaded = False
             st.rerun()
         else:
             st.error("下载失败，请检查网络（周末正常）")
@@ -99,36 +122,68 @@ if st.sidebar.button("🔄 更新数据 & 重新分析", use_container_width=Tru
 with st.sidebar.expander("⚙️ 更多"):
     if st.button("🗑️ 仅清除缓存", use_container_width=True):
         st.cache_data.clear()
+        st.session_state._market_data_loaded = False
         st.rerun()
 
 st.sidebar.markdown("---")
 
-# 加载持仓（本地优先）
-import json as _json
-_PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "portfolio.json")
-_portfolio = dict(cfg.PORTFOLIO)
-if os.path.exists(_PORTFOLIO_FILE):
-    try:
-        with open(_PORTFOLIO_FILE, "r", encoding="utf-8") as _f:
-            _portfolio = _json.load(_f)
-    except Exception:
-        pass
-
+# ============================================================
 # 持仓股一览
+# ============================================================
+_portfolio = load_portfolio()
+
 st.sidebar.markdown("### 💼 我的持仓")
 for code, name in _portfolio.items():
-    try:
-        rt = df_.get_stock_realtime(code)
-        pct = rt.get("change_pct", 0) if rt else 0
-        arrow = "▲" if (pct or 0) >= 0 else "▼"
-        color = "#DC143C" if (pct or 0) >= 0 else "#228B22"
+    # 从 session_state 读取实时行情（如果有）
+    rt = st.session_state.get("_realtime_cache", {}).get(code, {})
+    if rt:
+        pct = rt.get("change_pct", 0) or 0
+        arrow = "▲" if pct >= 0 else "▼"
+        color = "#DC143C" if pct >= 0 else "#228B22"
         st.sidebar.markdown(f"- {name} <span style='color:{color}'>{arrow}{pct:+.2f}%</span>", unsafe_allow_html=True)
-    except Exception:
+    else:
         st.sidebar.markdown(f"- {name}")
 
 st.sidebar.markdown("---")
 st.sidebar.caption("数据来源：akshare | 同花顺 | 东方财富")
 st.sidebar.caption("仅供研究参考，不构成投资建议")
+
+
+# ============================================================
+# 加载所有数据到 Session State（共享给其他页面）
+# ============================================================
+if "_market_data_loaded" not in st.session_state:
+    st.session_state._market_data_loaded = False
+
+if not st.session_state._market_data_loaded:
+    with st.spinner("正在加载市场数据..."):
+        # 获取指数行情
+        st.session_state._indices_data = df_.get_all_indices()
+        
+        # 获取市场情绪
+        st.session_state._sentiment = df_.get_market_sentiment()
+        
+        # 获取板块数据
+        st.session_state._sector_df = df_.get_sector_spot()
+        
+        # 获取涨停板数据
+        st.session_state._limit_up_df = df_.get_limit_up_stocks()
+        
+        # 获取所有持仓股的实时行情（为其他页面准备）
+        st.session_state._realtime_cache = {}
+        for code, name in _portfolio.items():
+            rt = df_.get_stock_realtime(code)
+            if rt:
+                st.session_state._realtime_cache[code] = rt
+        
+        st.session_state._market_data_loaded = True
+
+# 从 session_state 读取数据
+indices_data = st.session_state.get("_indices_data", {})
+sentiment = st.session_state.get("_sentiment", {})
+sector_df = st.session_state.get("_sector_df", pd.DataFrame())
+limit_up_df = st.session_state.get("_limit_up_df", pd.DataFrame())
+realtime_cache = st.session_state.get("_realtime_cache", {})
 
 # ============================================================
 # 首页仪表盘
@@ -139,10 +194,6 @@ st.caption(f"更新于 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 数据�
 
 # --- 第一行：三大指数 + 情绪 ---
 st.subheader("📊 大盘概览")
-
-with st.spinner("获取指数行情..."):
-    indices_data = df_.get_all_indices()
-    sentiment = df_.get_market_sentiment()
 
 cols_idx = st.columns(5)
 for i, (name, data) in enumerate(indices_data.items()):
@@ -172,17 +223,19 @@ if sentiment:
 st.markdown("---")
 st.subheader("💼 持仓快速预览")
 
-cols_hold = st.columns(len(_portfolio))
-for i, (code, name) in enumerate(_portfolio.items()):
-    with cols_hold[i]:
-        with st.spinner(f"加载{name}..."):
-            rt = df_.get_stock_realtime(code)
+if _portfolio:
+    cols_hold = st.columns(len(_portfolio))
+    for i, (code, name) in enumerate(_portfolio.items()):
+        with cols_hold[i]:
+            rt = realtime_cache.get(code, {})
             if rt:
                 price = rt.get("price", 0) or 0
                 pct = rt.get("change_pct", 0) or 0
                 st.metric(f"{name}", f"{price:.2f}", delta=f"{pct:+.2f}%")
             else:
                 st.metric(name, "—")
+else:
+    st.info("暂无持仓，请在 config.py 中配置 PORTFOLIO")
 
 # --- 第四行：板块热力图（小） ---
 st.markdown("---")
@@ -190,8 +243,6 @@ col_left, col_right = st.columns([2, 1])
 
 with col_left:
     st.subheader("🔥 板块涨跌热力图")
-    with st.spinner("加载板块数据..."):
-        sector_df = df_.get_sector_spot()
     if not sector_df.empty:
         fig_heat = viz.plot_sector_heatmap(sector_df, height=400)
         st.plotly_chart(fig_heat, use_container_width=True)
@@ -220,34 +271,31 @@ st.subheader("⭐ 持仓综合评分排行")
 
 hold_scores = []
 for code, name in _portfolio.items():
-    with st.spinner(f"评分 {name}..."):
-        try:
-            df = df_.get_stock_kline(code)
-            if not df.empty:
-                df = anl.calc_all_indicators(df)
-                pred = anl.predict_next_day(df)
-                trend = anl.classify_trend(df)
+    try:
+        df = df_.get_stock_kline(code)
+        if not df.empty:
+            df = anl.calc_all_indicators(df)
+            pred = anl.predict_next_day(df)
+            trend = anl.classify_trend(df)
 
-                # 综合评分
-                score = pred.get("score", 0) * 10 + 50
-                # 资金面加分
-                flow = df_.get_stock_fund_flow(code)
-                if flow and flow.get("main_net_inflow", 0):
-                    if flow["main_net_inflow"] > 0:
-                        score += 10
-                    else:
-                        score -= 5
-                score = max(0, min(100, score))
+            score = pred.get("score", 0) * 10 + 50
+            flow = df_.get_stock_fund_flow(code)
+            if flow and flow.get("main_net_inflow", 0):
+                if flow["main_net_inflow"] > 0:
+                    score += 10
+                else:
+                    score -= 5
+            score = max(0, min(100, score))
 
-                hold_scores.append({
-                    "name": name, "code": code,
-                    "score": score,
-                    "direction": pred.get("direction", "—"),
-                    "confidence": pred.get("confidence", 0),
-                    "trend": trend.get("short_signal", "—"),
-                })
-        except Exception:
-            hold_scores.append({"name": name, "code": code, "score": 50, "direction": "—", "confidence": 0, "trend": "—"})
+            hold_scores.append({
+                "name": name, "code": code,
+                "score": score,
+                "direction": pred.get("direction", "—"),
+                "confidence": pred.get("confidence", 0),
+                "trend": trend.get("short_signal", "—"),
+            })
+    except Exception:
+        hold_scores.append({"name": name, "code": code, "score": 50, "direction": "—", "confidence": 0, "trend": "—"})
 
 if hold_scores:
     hold_scores.sort(key=lambda x: x["score"], reverse=True)
@@ -267,7 +315,6 @@ with st.spinner("加载龙虎榜..."):
     hot_df = df_.get_hot_money_trades(days=5)
 
 if not hot_df.empty:
-    # 按游资汇总
     hot_summary = hot_df.groupby("hot_money_name").agg(
         操作笔数=("hot_money_name", "count"),
         净买入=("净额", "sum"),
@@ -285,7 +332,6 @@ if not hot_df.empty:
                 f"{net_w:+.0f}万",
                 delta=f"{row['操作笔数']}笔",
             )
-    # 游资图
     fig_hot = viz.plot_hot_money_summary(hot_df, height=300)
     st.plotly_chart(fig_hot, use_container_width=True)
 else:
@@ -293,10 +339,10 @@ else:
 
 # --- 底部 ---
 st.markdown("---")
-st.markdown("""
+st.markdown(f"""
 <div style="text-align:center;color:#94A3B8;font-size:12px;">
     <p>📊 每日A股复盘模型 | 数据来源：akshare / 同花顺 / 东方财富</p>
     <p>⚠️ 以上分析仅供研究参考，不构成任何投资建议。市场有风险，投资需谨慎。</p>
-    <p>数据更新时间：{}</p>
+    <p>数据更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
 </div>
-""".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')), unsafe_allow_html=True)
+""", unsafe_allow_html=True)
