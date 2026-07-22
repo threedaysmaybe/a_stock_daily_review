@@ -83,7 +83,13 @@ def download_all(progress_callback=None) -> dict:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
     if progress_callback:
-        progress_callback(total, total, "完成")
+        progress_callback(total - 1, total, "检查缺失数据并回补...")
+
+    # 回补缺失的历史交易日板块数据
+    backfilled = _backfill_missing_dates(today)
+
+    if progress_callback:
+        progress_callback(total - 1, total, "写入完成，即将刷新...")
 
     return meta
 
@@ -95,14 +101,14 @@ def _build_task_list() -> list:
     # 1. 指数K线
     for idx_name, idx_code in cfg.INDICES.items():
         tasks.append({
-            "name": f"指数-{idx_name}",
+            "name": f"{idx_name}",
             "filename": f"index_{idx_code}.csv",
             "fn": lambda c=idx_code: _download_index_kline(c),
         })
 
     # 2. 板块行情
     tasks.append({
-        "name": "板块行情",
+        "name": "行业板块行情",
         "filename": "sectors.csv",
         "fn": _download_sectors,
     })
@@ -115,7 +121,7 @@ def _build_task_list() -> list:
     
     # 3. 市场情绪
     tasks.append({
-        "name": "市场情绪",
+        "name": "市场情绪指标",
         "filename": "sentiment.json",
         "fn": _download_sentiment,
     })
@@ -123,33 +129,33 @@ def _build_task_list() -> list:
     # 4. 个股K线
     for code in _local_pf:
         tasks.append({
-            "name": f"K线-{_local_pf[code]}",
+            "name": f"{_local_pf[code]}",
             "filename": f"stock_{code}.csv",
             "fn": lambda c=code: _download_stock_kline(c),
         })
         tasks.append({
-            "name": f"财务-{_local_pf[code]}",
+            "name": f"{_local_pf[code]} 财务",
             "filename": f"stock_{code}_fin.json",
             "fn": lambda c=code: _download_stock_financial(c),
         })
 
     # 5. 涨停板
     tasks.append({
-        "name": "涨停板",
+        "name": "涨停板数据",
         "filename": "limit_up.csv",
         "fn": _download_limit_up,
     })
 
     # 6. 龙虎榜
     tasks.append({
-        "name": "龙虎榜",
+        "name": "龙虎榜数据",
         "filename": "lhb.csv",
         "fn": _download_lhb,
     })
 
     # 7. 股票列表（搜索用）
     tasks.append({
-        "name": "股票列表",
+        "name": "全市场股票列表",
         "filename": "stock_list.csv",
         "fn": _download_stock_list,
     })
@@ -172,16 +178,23 @@ def _download_index_kline(code: str) -> pd.DataFrame:
 
 
 def _download_sectors() -> pd.DataFrame:
-    """下载板块行情"""
+    """下载行业板块行情（同花顺源，90行业）"""
     try:
-        df = ak.stock_board_industry_name_em()
+        df = ak.stock_board_industry_summary_ths()
         if df is not None and not df.empty:
             df = df.rename(columns={
-                "板块名称": "sector_name", "涨跌幅": "change_pct",
-                "上涨家数": "up_count", "下跌家数": "down_count",
-                "领涨股票": "top_stock",
+                "板块": "sector_name",
+                "涨跌幅": "change_pct",
+                "上涨家数": "up_count",
+                "下跌家数": "down_count",
+                "领涨股": "top_stock",
             })
             df["change_pct"] = df["change_pct"].apply(_to_float)
+            for col in ["up_count", "down_count", "top_stock"]:
+                if col not in df.columns:
+                    df[col] = 0 if col != "top_stock" else ""
+            df = df[["sector_name", "change_pct", "up_count", "down_count", "top_stock"]]
+            df = df.sort_values("change_pct", ascending=False).reset_index(drop=True)
             return df
     except Exception:
         pass
@@ -354,9 +367,147 @@ def _download_stock_list() -> pd.DataFrame:
     return pd.DataFrame()
 
 
-# ============================================================
-# 保存/加载
-# ============================================================
+def _backfill_missing_dates(today_dir: str) -> int:
+    """回补最近10个交易日内缺失的板块排名数据，返回回补天数"""
+    if not os.path.exists(DATA_ROOT):
+        return 0
+    
+    # 收集所有可用的日期目录
+    all_dirs = sorted([d for d in os.listdir(DATA_ROOT) 
+                       if os.path.isdir(os.path.join(DATA_ROOT, d)) and d.isdigit()])
+    if not all_dirs:
+        return 0
+    
+    # 读取今天的上证指数K线，获取最近10个交易日列表
+    index_path = os.path.join(today_dir, "index_000001.csv")
+    if not os.path.exists(index_path):
+        return 0
+    
+    try:
+        idx_df = pd.read_csv(index_path, encoding="utf-8-sig")
+        if idx_df.empty or "date" not in idx_df.columns:
+            return 0
+        idx_df["date"] = pd.to_datetime(idx_df["date"])
+        # 最近10个交易日
+        last_date = idx_df["date"].iloc[-1]
+        trading_days = idx_df[idx_df["date"] >= last_date - timedelta(days=14)]["date"]
+        trading_days = sorted(set(d.dt.strftime("%Y%m%d") for d in trading_days))
+        trading_days = trading_days[-10:]  # 最多回补10天
+    except Exception:
+        return 0
+    
+    backfilled = 0
+    for date_str in trading_days:
+        target_dir = os.path.join(DATA_ROOT, date_str)
+        
+        # 检查是否需要回补行业板块
+        sector_path = os.path.join(target_dir, "sectors.csv")
+        if not os.path.exists(sector_path):
+            if _try_backfill_sectors(target_dir, date_str):
+                backfilled += 1
+        
+        # 检查是否需要回补概念板块
+        concept_path = os.path.join(target_dir, "concept_sectors.csv")
+        if not os.path.exists(concept_path):
+            if _try_backfill_concepts(target_dir, date_str):
+                backfilled += 1
+    
+    return backfilled
+
+
+def _try_backfill_sectors(target_dir: str, date_str: str) -> bool:
+    """回补行业板块：同花顺真实行业指数"""
+    try:
+        # 往前推几天取基准价
+        from datetime import datetime as _dt, timedelta as _td
+        start_dt = _dt.strptime(date_str, '%Y%m%d') - _td(days=4)
+        start_str = start_dt.strftime('%Y%m%d')
+        
+        rows = []
+        names = _get_ths_industry_names()
+        for name in names:
+            try:
+                df = ak.stock_board_industry_index_ths(symbol=name, start_date=start_str, end_date=date_str)
+                if df is not None and len(df) >= 2:
+                    prev_close = float(df.iloc[-2]['收盘价'])
+                    curr_close = float(df.iloc[-1]['收盘价'])
+                    change_pct = (curr_close - prev_close) / prev_close * 100 if prev_close else 0
+                    rows.append({'sector_name': name, 'change_pct': round(change_pct, 2),
+                                 'up_count': 0, 'down_count': 0, 'top_stock': ''})
+            except Exception:
+                continue
+            time.sleep(0.1)
+        if rows:
+            df = pd.DataFrame(rows)
+            df = df.sort_values('change_pct', ascending=False).reset_index(drop=True)
+            os.makedirs(target_dir, exist_ok=True)
+            df.to_csv(os.path.join(target_dir, 'sectors.csv'), index=False, encoding='utf-8-sig')
+            with open(os.path.join(target_dir, '_backfill_date.txt'), 'w') as f:
+                f.write(date_str)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _get_ths_industry_names() -> list:
+    if _get_ths_industry_names._cache:
+        return _get_ths_industry_names._cache
+    try:
+        df = ak.stock_board_industry_name_ths()
+        names = df['name'].tolist() if df is not None and not df.empty else []
+        _get_ths_industry_names._cache = names
+        return names
+    except Exception:
+        return []
+_get_ths_industry_names._cache = []
+
+
+def _try_backfill_concepts(target_dir: str, date_str: str) -> bool:
+    """回补概念板块：同花顺真实概念指数（限前50热门）"""
+    try:
+        from datetime import datetime as _dt, timedelta as _td
+        start_dt = _dt.strptime(date_str, '%Y%m%d') - _td(days=4)
+        start_str = start_dt.strftime('%Y%m%d')
+        
+        rows = []
+        names = _get_ths_concept_names()[:100]
+        for name in names:
+            try:
+                df = ak.stock_board_concept_index_ths(symbol=name, start_date=start_str, end_date=date_str)
+                if df is not None and len(df) >= 2:
+                    prev_close = float(df.iloc[-2]['收盘价'])
+                    curr_close = float(df.iloc[-1]['收盘价'])
+                    change_pct = (curr_close - prev_close) / prev_close * 100 if prev_close else 0
+                    rows.append({'sector_name': name, 'change_pct': round(change_pct, 2),
+                                 'up_count': 0, 'down_count': 0, 'top_stock': ''})
+            except Exception:
+                continue
+            time.sleep(0.1)
+        if rows:
+            df = pd.DataFrame(rows)
+            df = df.sort_values('change_pct', ascending=False).reset_index(drop=True)
+            os.makedirs(target_dir, exist_ok=True)
+            df.to_csv(os.path.join(target_dir, 'concept_sectors.csv'), index=False, encoding='utf-8-sig')
+            with open(os.path.join(target_dir, '_backfill_date.txt'), 'w') as f:
+                f.write(date_str)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _get_ths_concept_names() -> list:
+    if _get_ths_concept_names._cache:
+        return _get_ths_concept_names._cache
+    try:
+        df = ak.stock_board_concept_name_ths()
+        names = df['name'].tolist() if df is not None and not df.empty else []
+        _get_ths_concept_names._cache = names
+        return names
+    except Exception:
+        return []
+_get_ths_concept_names._cache = []
 
 def _save(task: dict, data, today_dir: str):
     """保存数据到本地文件"""

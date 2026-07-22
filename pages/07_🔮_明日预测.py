@@ -24,7 +24,7 @@ import numpy as np
 st.set_page_config(page_title="明日预测", page_icon="🔮", layout="wide")
 
 st.title("🔮 明日综合预测")
-st.caption(f"数据更新时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+st.caption(f"交易日：{(st.session_state.get('_trading_day') or pd.Timestamp.now()).strftime('%Y-%m-%d')}")
 
 # ============================================================
 # 1. 大盘预测

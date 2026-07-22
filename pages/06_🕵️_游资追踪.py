@@ -17,7 +17,7 @@ import pandas as pd
 st.set_page_config(page_title="游资追踪", page_icon="🕵️", layout="wide")
 
 st.title("🕵️ 游资龙虎榜追踪")
-st.caption(f"数据更新时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+st.caption(f"交易日：{(st.session_state.get('_trading_day') or pd.Timestamp.now()).strftime('%Y-%m-%d')}")
 
 # 游资操作数据 - 下拉选择
 days_options = [5, 10, 15, 20, 25, 30]
@@ -76,7 +76,8 @@ for name in selected_hot[:5] if selected_hot else available_hot[:5]:
         cols[1].metric("累计买入", fmt_cn(total_buy) if total_buy else "0")
         cols[2].metric("累计卖出", fmt_cn(total_sell) if total_sell else "0")
         cols[3].metric("净买入", fmt_cn(net) if net else "0",
-                       delta="净额" if net > 0 else "净卖出" if net < 0 else "平衡")
+                       delta="净额" if net > 0 else "净卖出" if net < 0 else "平衡",
+                       delta_color="inverse")
 
         st.dataframe(
             fmt_dataframe(name_df[["trade_date", "股票名称", "股票代码", "买入金额", "卖出金额", "净额"]]),

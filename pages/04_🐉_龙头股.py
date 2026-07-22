@@ -18,6 +18,7 @@ from utils.helpers import fmt_cn
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="龙头股分析", page_icon="🐉", layout="wide")
 
@@ -192,7 +193,7 @@ def render_ladder_board(df: pd.DataFrame):
 # 1. 获取数据
 # ============================================================
 st.title("🐉 热门龙头股分析")
-st.caption(f"数据更新时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+st.caption(f"交易日：{(st.session_state.get('_trading_day') or pd.Timestamp.now()).strftime('%Y-%m-%d')}")
 
 st.subheader("📋 今日涨停板")
 
@@ -370,31 +371,27 @@ if selected:
         metric_cols[1].metric(
             "涨跌幅", 
             f"{change_pct:+.2f}%" if change_pct else "—",
-            delta=f"{rt.get('change_amt', 0):+.2f}" if rt.get('change_amt') else None
+            delta=f"{rt.get('change_amt', 0):+.2f}" if rt.get('change_amt') else None,
+            delta_color="inverse"
         )
         metric_cols[2].metric("成交额", fmt_cn(amount) if amount else "—")
         metric_cols[3].metric("换手率", f"{turnover:.2f}%" if turnover else "—")
         metric_cols[4].metric("PE/PB", f"{pe:.1f}/{pb:.1f}" if pe else "—")
         metric_cols[5].metric("总市值", fmt_cn(total_mv) if total_mv else "—")
         
-        # ---- K线图 ----
+        # ---- K线图（ECharts，支持缩放拖动） ----
         st.subheader("📈 K线图")
-        fig_kline = viz.plot_kline_with_volume(kdf, title=f"{name}({code}) · 日K线", height=500)
-        st.plotly_chart(fig_kline, use_container_width=True)
+        kline_html = viz.plot_kline_echarts(kdf, title=f"{name}({code}) · 日K线", height=500)
+        components.html(kline_html, height=530)
         
-        # ---- 技术指标 ----
+        # ---- 技术指标（ECharts，支持缩放拖动） ----
         st.subheader("🔧 技术指标")
         indicator_tabs = st.tabs(["MACD", "KDJ", "RSI", "BOLL"])
-        indicator_functions = {
-            "MACD": viz.plot_macd,
-            "KDJ": viz.plot_kdj,
-            "RSI": viz.plot_rsi,
-            "BOLL": viz.plot_boll,
-        }
-        for tab, name_key in zip(indicator_tabs, indicator_functions.keys()):
+        indicator_types = ["MACD", "KDJ", "RSI", "BOLL"]
+        for tab, ind_type in zip(indicator_tabs, indicator_types):
             with tab:
-                fig = indicator_functions[name_key](kdf)
-                st.plotly_chart(fig, use_container_width=True)
+                ind_html = viz.plot_indicator_echarts(kdf, ind_type, height=280)
+                components.html(ind_html, height=310)
         
         # ---- 趋势研判 ----
         st.subheader("📋 趋势研判")

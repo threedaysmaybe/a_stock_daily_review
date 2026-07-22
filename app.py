@@ -15,6 +15,7 @@ import numpy as np
 import os
 import json
 import base64
+import time
 from datetime import datetime
 
 # ============================================================
@@ -77,7 +78,11 @@ def load_portfolio() -> dict:
 # 侧边栏
 # ============================================================
 st.sidebar.title("📈 每日A股复盘")
-st.sidebar.caption(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+st.sidebar.caption(
+    f"📅 {st.session_state.get('_trading_day', datetime.now()):%Y-%m-%d}"
+    if st.session_state.get('_trading_day') else
+    f"📅 {datetime.now():%Y-%m-%d %H:%M}"
+)
 
 # 导航
 st.sidebar.markdown("---")
@@ -121,25 +126,31 @@ else:
 st.sidebar.caption(f"上次更新：{latest if latest else '无'}")
 
 if st.sidebar.button("🔄 更新数据 & 重新分析", use_container_width=True, type="primary"):
-    with st.spinner("正在下载最新数据..."):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+    progress_bar = st.progress(0, text="⏳ 准备下载...")
+    status_text = st.empty()
 
-        def on_progress(i, total, name):
-            pct = min((i + 1) / total, 1.0) if total > 0 else 1.0
-            progress_bar.progress(pct)
-            status_text.text(f"({i+1}/{total}) {name}")
+    def on_progress(i, total, name):
+        pct = min((i + 1) / total, 1.0) if total > 0 else 1.0
+        shown = min(i + 1, total)
+        progress_bar.progress(pct, text=f"📥 ({shown}/{total}) {name}")
+        status_text.caption(f"正在获取：{name}")
 
-        meta = dm.download_all(progress_callback=on_progress)
-        progress_bar.empty()
-        status_text.empty()
-        if meta["ok"] > 0:
-            # 清除所有缓存
-            st.cache_data.clear()
-            st.session_state._market_data_loaded = False
-            st.rerun()
-        else:
-            st.error("下载失败，请检查网络（周末正常）")
+    meta = dm.download_all(progress_callback=on_progress)
+    # 重置模块级缓存，强制下次读盘
+    df_.get_sector_spot._cache = None
+    df_.get_concept_spot._cache = None
+    progress_bar.progress(1.0, text="✅ 下载完成，正在刷新...")
+    time.sleep(0.3)
+    progress_bar.empty()
+    status_text.empty()
+    if meta["ok"] > 0:
+        # 清除所有缓存
+        st.cache_data.clear()
+        st.session_state._market_data_loaded = False
+        st.session_state._update_summary = f"成功 {meta['ok']}，失败 {meta['fail']}"
+        st.rerun()
+    else:
+        st.error("下载失败，请检查网络（周末正常）")
 
 with st.sidebar.expander("⚙️ 更多"):
     if st.button("🗑️ 仅清除缓存", use_container_width=True):
@@ -182,11 +193,20 @@ if not st.session_state._market_data_loaded:
         # 获取指数行情
         st.session_state._indices_data = df_.get_all_indices()
         
+        # 从K线数据提取最后交易日（而非系统时间）
+        try:
+            sh_kline = df_.get_index_kline("000001")
+            if not sh_kline.empty:
+                st.session_state._trading_day = sh_kline["date"].iloc[-1]
+        except Exception:
+            st.session_state._trading_day = datetime.now()
+        
         # 获取市场情绪
         st.session_state._sentiment = df_.get_market_sentiment()
         
         # 获取板块数据
         st.session_state._sector_df = df_.get_sector_spot()
+        st.session_state._concept_df = df_.get_concept_spot()
         
         # 获取涨停板数据
         st.session_state._limit_up_df = df_.get_limit_up_stocks()
@@ -207,12 +227,22 @@ sector_df = st.session_state.get("_sector_df", pd.DataFrame())
 limit_up_df = st.session_state.get("_limit_up_df", pd.DataFrame())
 realtime_cache = st.session_state.get("_realtime_cache", {})
 
+# 统一交易日显示
+_trading_day = st.session_state.get("_trading_day", datetime.now())
+_trading_day_str = _trading_day.strftime("%Y-%m-%d") if hasattr(_trading_day, 'strftime') else str(_trading_day)[:10]
+
 # ============================================================
 # 首页仪表盘
 # ============================================================
 
 st.title("📈 每日A股复盘 · 仪表盘")
-st.caption(f"更新于 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 数据来源：akshare")
+st.caption(f"交易日 {_trading_day_str} | 数据来源：akshare")
+
+# 显示更新完成通知
+if st.session_state.get("_update_summary"):
+    summary = st.session_state.pop("_update_summary")
+    st.toast(f"✅ 数据更新完成！{summary}", icon="✅")
+    st.balloons()
 
 # --- 第一行：三大指数 + 情绪 ---
 st.subheader("📊 大盘概览")
@@ -224,7 +254,7 @@ for i, (name, data) in enumerate(indices_data.items()):
     with cols_idx[i]:
         price = data.get("price", 0) or 0
         pct = data.get("change_pct", 0) or 0
-        st.metric(name, f"{price:.2f}" if price else "—", delta=f"{pct:+.2f}%" if pct else None)
+        st.metric(name, f"{price:.2f}" if price else "—", delta=f"{pct:+.2f}%" if pct else None, delta_color="inverse")
 
 # 情绪
 with cols_idx[4]:
@@ -253,7 +283,7 @@ if _portfolio:
             if rt:
                 price = rt.get("price", 0) or 0
                 pct = rt.get("change_pct", 0) or 0
-                st.metric(f"{name}", f"{price:.2f}", delta=f"{pct:+.2f}%")
+                st.metric(f"{name}", f"{price:.2f}", delta=f"{pct:+.2f}%", delta_color="inverse")
             else:
                 st.metric(name, "—")
 else:
@@ -365,6 +395,6 @@ st.markdown(f"""
 <div style="text-align:center;color:#94A3B8;font-size:12px;">
     <p>📊 每日A股复盘模型 | 数据来源：akshare / 同花顺 / 东方财富</p>
     <p>⚠️ 以上分析仅供研究参考，不构成任何投资建议。市场有风险，投资需谨慎。</p>
-    <p>数据更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+    <p>交易日：{_trading_day_str} · 数据来源：akshare / 同花顺 / 东方财富</p>
 </div>
 """, unsafe_allow_html=True)

@@ -53,7 +53,7 @@ if "portfolio" not in st.session_state:
     st.session_state.portfolio = load_portfolio()
 
 st.title("💼 持仓股深度分析")
-st.caption(f"数据更新时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+st.caption(f"交易日：{(st.session_state.get('_trading_day') or pd.Timestamp.now()).strftime('%Y-%m-%d')}")
 
 # 预加载股票列表（来自本地CSV，一键下载时已保存。首次使用点侧边栏下载）
 STOCK_LIST_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "stock_list.csv")
@@ -275,7 +275,7 @@ with st.container():
         pe_pb_str = f"{pe:.1f}/{pb:.1f}" if pe and pb and pe > 0 and pb > 0 else "—"
         
         row1_col1, row1_col2, row1_col3, row1_col4 = st.columns(4)
-        row1_col1.metric("📊 当前价", f"{price:.2f}", delta=f"{pct:+.2f}%")
+        row1_col1.metric("📊 当前价", f"{price:.2f}", delta=f"{pct:+.2f}%", delta_color="inverse")
         row1_col2.metric("🎯 预测方向", direction, delta=f"置信度 {confidence}%")
         row1_col3.metric("📈 综合评分", f"{total_score:.0f}分")
         row1_col4.metric("🛡️ 风险", risk_level)
@@ -311,7 +311,8 @@ col_f1, col_f2, col_f3, col_f4 = st.columns(4)
 
 if realtime:
     col_f1.metric("最新价", f"{realtime.get('price', 0):.2f}",
-                  delta=f"{realtime.get('change_pct', 0):+.2f}%" if realtime.get('change_pct') else None)
+                  delta=f"{realtime.get('change_pct', 0):+.2f}%" if realtime.get('change_pct') else None,
+                  delta_color="inverse")
     col_f2.metric("总市值", fmt_cn(realtime.get('total_mv', 0)) if realtime.get('total_mv') else "—")
     col_f3.metric("动态PE", f"{realtime.get('pe', 0):.1f}" if realtime.get('pe') else "—")
     col_f4.metric("市净率PB", f"{realtime.get('pb', 0):.2f}" if realtime.get('pb') else "—")

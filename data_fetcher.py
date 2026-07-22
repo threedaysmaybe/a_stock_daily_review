@@ -155,11 +155,15 @@ def get_all_indices() -> dict:
 # 2. 板块数据
 # ============================================================
 
-@st.cache_data(ttl=cfg.CACHE_TTL)
 def get_sector_spot() -> pd.DataFrame:
-    """获取板块实时行情"""
-    # 从本地缓存读取
+    """获取板块实时行情（30秒简单缓存，避免同一次页面交互重复读盘）"""
+    # 模块级简单缓存：比 @st.cache_data 更可控
+    now = time.time()
+    if get_sector_spot._cache is not None and now - get_sector_spot._time < 30:
+        return get_sector_spot._cache.copy()
+    
     local = dm.load_local("sectors.csv")
+    result = None
     if local is not None and not local.empty:
         # 重命名中文列名为英文
         if "板块" in local.columns:
@@ -177,41 +181,54 @@ def get_sector_spot() -> pd.DataFrame:
         if "top_stock" not in local.columns:
             local["top_stock"] = ""
         # 按涨跌幅从高到低排序
-        local = local.sort_values("change_pct", ascending=False).reset_index(drop=True)
-        return local
+        result = local.sort_values("change_pct", ascending=False).reset_index(drop=True)
     
-    try:
-        df = ak.stock_sector_spot()
-        if df is not None and not df.empty:
-            df = df.rename(columns={
-                "板块": "sector_name",
-                "涨跌幅": "change_pct",
-            })
-            df["change_pct"] = pd.to_numeric(df["change_pct"], errors="coerce").fillna(0)
-            df = df.drop_duplicates(subset=["sector_name"], keep="first")
-            df["up_count"] = 0
-            df["down_count"] = 0
-            df["top_stock"] = ""
-            df = df[["sector_name", "change_pct", "up_count", "down_count", "top_stock"]]
-            df = df.sort_values("change_pct", ascending=False).reset_index(drop=True)
-            
-            today = datetime.now().strftime("%Y%m%d")
-            data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", today)
-            os.makedirs(data_dir, exist_ok=True)
-            df.to_csv(os.path.join(data_dir, "sectors.csv"), index=False, encoding="utf-8-sig")
-            return df
-    except Exception as e:
-        print(f"stock_sector_spot 失败: {e}")
+    if result is None:
+        try:
+            df = ak.stock_board_industry_summary_ths()
+            if df is not None and not df.empty:
+                df = df.rename(columns={
+                    "板块": "sector_name",
+                    "涨跌幅": "change_pct",
+                    "上涨家数": "up_count",
+                    "下跌家数": "down_count",
+                    "领涨股": "top_stock",
+                })
+                df["change_pct"] = pd.to_numeric(df["change_pct"], errors="coerce").fillna(0)
+                for col in ["up_count", "down_count", "top_stock"]:
+                    if col not in df.columns:
+                        df[col] = 0 if col != "top_stock" else ""
+                result = df[["sector_name", "change_pct", "up_count", "down_count", "top_stock"]]
+                result = result.sort_values("change_pct", ascending=False).reset_index(drop=True)
+                
+                today = datetime.now().strftime("%Y%m%d")
+                data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", today)
+                os.makedirs(data_dir, exist_ok=True)
+                result.to_csv(os.path.join(data_dir, "sectors.csv"), index=False, encoding="utf-8-sig")
+        except Exception as e:
+            print(f"stock_board_industry_summary_ths 失败: {e}")
     
-    return pd.DataFrame()
+    if result is None:
+        result = pd.DataFrame()
+    
+    get_sector_spot._cache = result.copy()
+    get_sector_spot._time = now
+    return result
+
+# 初始化模块级缓存
+get_sector_spot._cache = None
+get_sector_spot._time = 0
 
 
 
-@st.cache_data(ttl=cfg.CACHE_TTL)
 def get_concept_spot() -> pd.DataFrame:
-    """获取概念板块实时行情（从同花顺页面解析 gnSection JSON）"""
-    # 从本地缓存读取
+    """获取概念板块实时行情（30秒简单缓存）"""
+    now = time.time()
+    if get_concept_spot._cache is not None and now - get_concept_spot._time < 30:
+        return get_concept_spot._cache.copy()
+    
     local = dm.load_local("concept_sectors.csv")
+    result = None
     if local is not None and not local.empty:
         # 补全缺失列
         if "up_count" not in local.columns:
@@ -220,54 +237,63 @@ def get_concept_spot() -> pd.DataFrame:
             local["down_count"] = 0
         if "top_stock" not in local.columns:
             local["top_stock"] = ""
-        return local
+        result = local
     
-    try:
-        url = "https://q.10jqka.com.cn/gn/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://q.10jqka.com.cn/",
-        }
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        response.encoding = "gbk"
-        
-        if response.status_code == 200:
-            html = response.text
-            pattern = r'<input type="hidden" id="gnSection" value=\'([^\']+)\'>'
-            match = re.search(pattern, html)
+    if result is None:
+        try:
+            url = "https://q.10jqka.com.cn/gn/"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://q.10jqka.com.cn/",
+            }
             
-            if match:
-                json_str = match.group(1)
-                json_str = json_str.replace('\\"', '"').replace('\\/', '/')
-                data = json.loads(json_str)
+            response = requests.get(url, headers=headers, timeout=10)
+            response.encoding = "gbk"
+            
+            if response.status_code == 200:
+                html = response.text
+                pattern = r'<input type="hidden" id="gnSection" value=\'([^\']+)\'>'
+                match = re.search(pattern, html)
                 
-                concepts = []
-                for key, value in data.items():
-                    platename = value.get("platename", "")
-                    change_pct = value.get("199112", 0)
-                    if platename:
-                        concepts.append({
-                            "sector_name": platename,
-                            "change_pct": float(change_pct) if change_pct else 0,
-                            "up_count": 0,
-                            "down_count": 0,
-                            "top_stock": ""
-                        })
-                
-                if concepts:
-                    df = pd.DataFrame(concepts)
-                    df = df.sort_values("change_pct", ascending=False).reset_index(drop=True)
+                if match:
+                    json_str = match.group(1)
+                    json_str = json_str.replace('\\"', '"').replace('\\/', '/')
+                    data = json.loads(json_str)
                     
-                    today = datetime.now().strftime("%Y%m%d")
-                    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", today)
-                    os.makedirs(data_dir, exist_ok=True)
-                    df.to_csv(os.path.join(data_dir, "concept_sectors.csv"), index=False, encoding="utf-8-sig")
-                    return df
-    except Exception as e:
-        print(f"概念板块解析失败: {e}")
+                    concepts = []
+                    for key, value in data.items():
+                        platename = value.get("platename", "")
+                        change_pct = value.get("199112", 0)
+                        if platename:
+                            concepts.append({
+                                "sector_name": platename,
+                                "change_pct": float(change_pct) if change_pct else 0,
+                                "up_count": 0,
+                                "down_count": 0,
+                                "top_stock": ""
+                            })
+                    
+                    if concepts:
+                        result = pd.DataFrame(concepts)
+                        result = result.sort_values("change_pct", ascending=False).reset_index(drop=True)
+                        
+                        today = datetime.now().strftime("%Y%m%d")
+                        data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", today)
+                        os.makedirs(data_dir, exist_ok=True)
+                        result.to_csv(os.path.join(data_dir, "concept_sectors.csv"), index=False, encoding="utf-8-sig")
+        except Exception as e:
+            print(f"概念板块解析失败: {e}")
     
-    return pd.DataFrame()
+    if result is None:
+        result = pd.DataFrame()
+    
+    get_concept_spot._cache = result.copy()
+    get_concept_spot._time = now
+    return result
+
+# 初始化模块级缓存
+get_concept_spot._cache = None
+get_concept_spot._time = 0
 
 
 @st.cache_data(ttl=cfg.CACHE_TTL)

@@ -18,31 +18,33 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="板块分析", page_icon="🔥", layout="wide")
 
 st.title("🔥 板块分析")
-st.caption(f"数据更新时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+st.caption(f"交易日：{(st.session_state.get('_trading_day') or pd.Timestamp.now()).strftime('%Y-%m-%d')}")
 
 # ============================================================
-# 获取行业板块数据
-# ============================================================
-with st.spinner("正在获取行业板块数据..."):
-    sector_df = df_.get_sector_spot()
+# 从 session_state 读取行业板块数据（app.py 已加载）
+sector_df = st.session_state.get("_sector_df", pd.DataFrame())
+if sector_df.empty:
+    with st.spinner("正在获取行业板块数据..."):
+        sector_df = df_.get_sector_spot()
 
 if sector_df.empty:
     st.error("无法获取板块数据")
     st.stop()
 
-# ============================================================
-# 获取概念板块数据
-# ============================================================
-with st.spinner("正在获取概念板块数据..."):
-    concept_df = df_.get_concept_spot()
+# 从 session_state 读取概念板块数据
+concept_df = st.session_state.get("_concept_df", pd.DataFrame())
+if concept_df.empty:
+    with st.spinner("正在获取概念板块数据..."):
+        concept_df = df_.get_concept_spot()
 
 # ============================================================
 # 获取近5日历史板块数据
 # ============================================================
 def get_history_data(data_type="sector", days=10):
-    """获取历史板块数据（返回所有可用日期）"""
+    """获取历史板块数据（返回所有可用日期，日期取自K线真实交易日）"""
     data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
     history_data = []
+    seen_dates = set()  # 去重：同一交易日只保留最新一次下载
     
     if not os.path.exists(data_dir):
         return history_data
@@ -70,8 +72,36 @@ def get_history_data(data_type="sector", days=10):
                     if "sector_name" not in df.columns and len(df.columns) > 0:
                         df["sector_name"] = df.iloc[:, 0]
                     
+                    # 日期优先级：回补标记 > K线真实日期 > 目录名
                     display_date = date_str[:4] + "-" + date_str[4:6] + "-" + date_str[6:8]
-                    df["trade_date"] = display_date
+                    is_backfill = False
+                    bf_path = os.path.join(data_dir, date_str, "_backfill_date.txt")
+                    if os.path.exists(bf_path):
+                        try:
+                            with open(bf_path, "r") as f:
+                                bf_date = f.read().strip()
+                            if len(bf_date) == 8 and bf_date.isdigit():
+                                display_date = bf_date[:4] + "-" + bf_date[4:6] + "-" + bf_date[6:8]
+                            is_backfill = True
+                        except Exception:
+                            pass
+                    else:
+                        index_path = os.path.join(data_dir, date_str, "index_000001.csv")
+                        if os.path.exists(index_path):
+                            try:
+                                idx_df = pd.read_csv(index_path, encoding="utf-8-sig")
+                                if not idx_df.empty and "date" in idx_df.columns:
+                                    last_date = pd.to_datetime(idx_df["date"].iloc[-1])
+                                    display_date = last_date.strftime("%Y-%m-%d")
+                            except Exception:
+                                pass  # K线读取失败则用目录名
+                    
+                    # 去重：同一交易日只保留第一个（最新下载的）
+                    if display_date in seen_dates:
+                        continue
+                    seen_dates.add(display_date)
+                    
+                    df["trade_date"] = "📌 " + display_date if is_backfill else display_date
                     history_data.append(df)
                     collected += 1
                     if collected >= days:
@@ -95,9 +125,9 @@ with tab1:
 
     cols = st.columns(4)
     cols[0].metric("板块总数", len(sector_df))
-    cols[1].metric("上涨板块", up_count, delta=f"占比{up_count/len(sector_df)*100:.0f}%")
+    cols[1].metric("上涨板块", up_count, delta=f"占比{up_count/len(sector_df)*100:.0f}%", delta_color="inverse")
     cols[2].metric("下跌板块", down_count, delta=f"占比{down_count/len(sector_df)*100:.0f}%")
-    cols[3].metric("平均涨跌", f"{avg_pct:+.2f}%")
+    cols[3].metric("平均涨跌", f"{avg_pct:+.2f}%", delta_color="inverse")
 
     st.divider()
     
@@ -122,7 +152,7 @@ with tab1:
             st.caption("暂无数据")
     
     with col_right:
-        st.subheader("📅 近5日每日TOP5")
+        st.subheader("📅 近5个交易日TOP5")
         history = get_history_data(data_type="sector", days=10)
         if history:
             history = history[:5]
@@ -240,9 +270,9 @@ with tab2:
 
         cols = st.columns(4)
         cols[0].metric("概念总数", len(concept_df))
-        cols[1].metric("上涨概念", up_count, delta=f"占比{up_count/len(concept_df)*100:.0f}%")
+        cols[1].metric("上涨概念", up_count, delta=f"占比{up_count/len(concept_df)*100:.0f}%", delta_color="inverse")
         cols[2].metric("下跌概念", down_count, delta=f"占比{down_count/len(concept_df)*100:.0f}%")
-        cols[3].metric("平均涨跌", f"{avg_pct:+.2f}%")
+        cols[3].metric("平均涨跌", f"{avg_pct:+.2f}%", delta_color="inverse")
 
         st.divider()
         
@@ -267,7 +297,7 @@ with tab2:
                 st.caption("暂无数据")
         
         with col_right:
-            st.subheader("📅 近5日每日TOP5")
+            st.subheader("📅 近5个交易日TOP5")
             history = get_history_data(data_type="concept", days=10)
             if history:
                 history = history[:5]

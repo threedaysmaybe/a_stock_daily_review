@@ -26,7 +26,7 @@ import pandas as pd
 st.set_page_config(page_title="资金情绪", page_icon="💹", layout="wide")
 
 st.title("💹 资金情绪分析")
-st.caption(f"数据更新时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+st.caption(f"交易日：{(st.session_state.get('_trading_day') or pd.Timestamp.now()).strftime('%Y-%m-%d')}")
 
 # ============================================================
 # 从 session_state 读取市场情绪（首页已加载）
@@ -97,7 +97,7 @@ for code, name in _portfolio_data.items():
             cols = st.columns(5)
             main_inflow = flow.get("main_net_inflow", 0) or 0
             cols[0].metric("主力净流入(万)", fmt_cn(main_inflow),
-                          delta="流入" if main_inflow > 0 else "流出")
+                          delta="流入" if main_inflow > 0 else "流出", delta_color="inverse")
             cols[1].metric("超大单(万)", fmt_cn(flow.get('super_large_net', 0) or 0))
             cols[2].metric("大单(万)", fmt_cn(flow.get('large_net', 0) or 0))
             cols[3].metric("中单(万)", fmt_cn(flow.get('mid_net', 0) or 0))

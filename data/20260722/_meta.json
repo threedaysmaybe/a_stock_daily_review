@@ -1,0 +1,29 @@
+{
+  "date": "20260723",
+  "download_time": "2026-07-23 00:14:45",
+  "ok": 20,
+  "fail": 0,
+  "total": 20,
+  "files": [
+    "index_000001.csv",
+    "index_399001.csv",
+    "index_399006.csv",
+    "index_000688.csv",
+    "sectors.csv",
+    "concept_sectors.csv",
+    "sentiment.json",
+    "stock_600519.csv",
+    "stock_600519_fin.json",
+    "stock_300750.csv",
+    "stock_300750_fin.json",
+    "stock_002415.csv",
+    "stock_002415_fin.json",
+    "stock_601318.csv",
+    "stock_601318_fin.json",
+    "stock_000858.csv",
+    "stock_000858_fin.json",
+    "limit_up.csv",
+    "lhb.csv",
+    "stock_list.csv"
+  ]
+}

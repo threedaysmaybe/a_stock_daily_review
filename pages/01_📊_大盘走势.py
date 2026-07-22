@@ -13,11 +13,12 @@ import data_fetcher as df_
 import analyzer as anl
 import visualizer as viz
 import pandas as pd
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="大盘走势", page_icon="📊", layout="wide")
 
 st.title("📊 大盘走势分析")
-st.caption(f"数据更新时间：{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
+st.caption(f"交易日：{(st.session_state.get('_trading_day') or pd.Timestamp.now()).strftime('%Y-%m-%d')}")
 
 # ============================================================
 # 从 session_state 读取指数行情（首页已加载）
@@ -41,6 +42,7 @@ for i, (name, data) in enumerate(indices_data.items()):
             label=name,
             value=f"{price:.2f}" if price else "—",
             delta=f"{arrow} {pct:+.2f}%" if pct else None,
+            delta_color="inverse",
         )
 
 st.divider()
@@ -60,32 +62,21 @@ if df.empty:
     st.error("无法获取指数数据，请检查网络连接")
     st.stop()
 
-# K线图 + 成交量
+# K线图 + 成交量（ECharts，支持缩放拖动）
 st.subheader(f"📈 {selected_index} — K线图（近120日）")
-fig_kline = viz.plot_kline_with_volume(df, title=f"{selected_index} · 日K线图")
-st.plotly_chart(fig_kline, use_container_width=True)
+kline_html = viz.plot_kline_echarts(df, title=f"{selected_index} · 日K线图", height=500)
+components.html(kline_html, height=530)
 
-# 技术指标
+# 技术指标（ECharts，支持缩放拖动）
 st.subheader("🔍 技术指标详情")
 
-col1, col2 = st.columns(2)
-with col1:
-    # MACD
-    fig_macd = viz.plot_macd(df)
-    st.plotly_chart(fig_macd, use_container_width=True)
+indicator_tabs = st.tabs(["MACD", "KDJ", "RSI", "BOLL"])
+indicator_types = ["MACD", "KDJ", "RSI", "BOLL"]
 
-    # KDJ
-    fig_kdj = viz.plot_kdj(df)
-    st.plotly_chart(fig_kdj, use_container_width=True)
-
-with col2:
-    # RSI
-    fig_rsi = viz.plot_rsi(df)
-    st.plotly_chart(fig_rsi, use_container_width=True)
-
-    # BOLL
-    fig_boll = viz.plot_boll(df)
-    st.plotly_chart(fig_boll, use_container_width=True)
+for tab, ind_type in zip(indicator_tabs, indicator_types):
+    with tab:
+        ind_html = viz.plot_indicator_echarts(df, ind_type, height=280)
+        components.html(ind_html, height=310)
 
 # 趋势分析
 st.subheader("📋 趋势研判")
