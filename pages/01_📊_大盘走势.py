@@ -62,35 +62,18 @@ if df.empty:
     st.error("无法获取指数数据，请检查网络连接")
     st.stop()
 
-# K线图 + 成交量（ECharts，支持缩放拖动）
-st.subheader(f"📈 {selected_index} — K线图（近120日）")
-kline_html = viz.plot_kline_echarts(df, title=f"{selected_index} · 日K线图", height=500)
-components.html(kline_html, height=530)
-
-# 技术指标（ECharts，支持缩放拖动）
-st.subheader("🔍 技术指标详情")
-
-indicator_tabs = st.tabs(["MACD", "KDJ", "RSI", "BOLL"])
-indicator_types = ["MACD", "KDJ", "RSI", "BOLL"]
-
-for tab, ind_type in zip(indicator_tabs, indicator_types):
-    with tab:
-        ind_html = viz.plot_indicator_echarts(df, ind_type, height=280)
-        components.html(ind_html, height=310)
-
-# 趋势分析
-st.subheader("📋 趋势研判")
+# === 结论前置：趋势 + 支撑压力 + 量价 ===
 trend = anl.classify_trend(df)
 
-cols = st.columns(3)
-with cols[0]:
+st.subheader("📋 趋势研判")
+cols_trend = st.columns(3)
+with cols_trend[0]:
     st.info(f"**短期趋势**\n\n{trend.get('short_trend', '—')}\n\n{trend.get('short_signal', '')}")
-with cols[1]:
+with cols_trend[1]:
     st.info(f"**中期趋势**\n\n{trend.get('mid_trend', '—')}\n\n{trend.get('mid_signal', '')}")
-with cols[2]:
+with cols_trend[2]:
     st.info(f"**MACD信号**\n\n{trend.get('macd_signal', '—')}")
 
-# 关键点位
 sr = trend.get("sr_levels", {})
 if sr:
     st.subheader("📍 关键支撑/压力位")
@@ -104,14 +87,9 @@ if sr:
         for r in sr.get("resistances", []):
             st.write(f"🔴 {r['label']}: ¥{r['price']} ({r['type']})")
 
-# 量价分析
 st.subheader("📊 量价关系")
 if not df.empty and len(df) >= 5:
-    # 5日量价变化
     recent5 = df.tail(5)
-    vol_change = recent5["volume"].iloc[-1] / recent5["volume"].iloc[-2] - 1 if len(recent5) >= 2 else 0
-    price_change = recent5["close"].iloc[-1] / recent5["close"].iloc[-2] - 1 if len(recent5) >= 2 else 0
-
     col_a, col_b, col_c = st.columns(3)
     with col_a:
         vol_avg5 = recent5["volume"].mean()
@@ -124,3 +102,21 @@ if not df.empty and len(df) >= 5:
     with col_c:
         avg_amplitude = recent5.apply(lambda x: (x["high"] - x["low"]) / x["close"] * 100, axis=1).mean()
         st.metric("5日平均振幅", f"{avg_amplitude:.2f}%")
+
+st.divider()
+
+# K线图 + 成交量（ECharts，支持缩放拖动）
+st.subheader(f"📈 {selected_index} — K线图（近120日）")
+kline_html = viz.plot_kline_echarts(df, title=f"{selected_index} · 日K线图", height=500, sr_levels=sr)
+components.html(kline_html, height=530)
+
+# 技术指标（ECharts，支持缩放拖动）
+st.subheader("🔍 技术指标详情")
+
+indicator_tabs = st.tabs(["MACD", "KDJ", "RSI", "BOLL"])
+indicator_types = ["MACD", "KDJ", "RSI", "BOLL"]
+
+for tab, ind_type in zip(indicator_tabs, indicator_types):
+    with tab:
+        ind_html = viz.plot_indicator_echarts(df, ind_type, height=280)
+        components.html(ind_html, height=310)

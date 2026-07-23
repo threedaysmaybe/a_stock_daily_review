@@ -130,15 +130,27 @@ if st.sidebar.button("🔄 更新数据 & 重新分析", use_container_width=Tru
     status_text = st.empty()
 
     def on_progress(i, total, name):
-        pct = min((i + 1) / total, 1.0) if total > 0 else 1.0
+        pct = min((i + 1) / total, 0.95) if total > 0 else 0.95
         shown = min(i + 1, total)
         progress_bar.progress(pct, text=f"📥 ({shown}/{total}) {name}")
         status_text.caption(f"正在获取：{name}")
 
     meta = dm.download_all(progress_callback=on_progress)
-    # 重置模块级缓存，强制下次读盘
+    # 重置模块级缓存
     df_.get_sector_spot._cache = None
     df_.get_concept_spot._cache = None
+    
+    # 回补历史缺失的板块数据（独立进度，不影响下载进度条）
+    missing_dates = meta.get("backfill_needed", [])
+    if missing_dates:
+        progress_bar.progress(0.95, text="🔍 回补历史板块排名...")
+        bf_total = len(missing_dates)
+        for bfi, bfd in enumerate(missing_dates):
+            progress_bar.progress(0.95 + 0.05 * (bfi + 1) / bf_total, 
+                                  text=f"🔍 回补 {bfd[0]} {bfd[1]}...")
+            dm.backfill_one(bfd[0], bfd[1])
+        progress_bar.progress(0.95, text="🔍 回补完成")
+    
     progress_bar.progress(1.0, text="✅ 下载完成，正在刷新...")
     time.sleep(0.3)
     progress_bar.empty()
@@ -189,36 +201,30 @@ if "_market_data_loaded" not in st.session_state:
     st.session_state._market_data_loaded = False
 
 if not st.session_state._market_data_loaded:
-    with st.spinner("正在加载市场数据..."):
-        # 获取指数行情
-        st.session_state._indices_data = df_.get_all_indices()
-        
-        # 从K线数据提取最后交易日（而非系统时间）
-        try:
-            sh_kline = df_.get_index_kline("000001")
-            if not sh_kline.empty:
-                st.session_state._trading_day = sh_kline["date"].iloc[-1]
-        except Exception:
-            st.session_state._trading_day = datetime.now()
-        
-        # 获取市场情绪
-        st.session_state._sentiment = df_.get_market_sentiment()
-        
-        # 获取板块数据
-        st.session_state._sector_df = df_.get_sector_spot()
-        st.session_state._concept_df = df_.get_concept_spot()
-        
-        # 获取涨停板数据
-        st.session_state._limit_up_df = df_.get_limit_up_stocks()
-        
-        # 获取所有持仓股的实时行情（为其他页面准备）
-        st.session_state._realtime_cache = {}
-        for code, name in _portfolio.items():
-            rt = df_.get_stock_realtime(code)
-            if rt:
-                st.session_state._realtime_cache[code] = rt
-        
-        st.session_state._market_data_loaded = True
+    # 全部从本地文件读取，不走缓存函数（避免右上角 Running xxx）
+    st.session_state._indices_data = df_.get_all_indices()
+    
+    # 交易日：读上证K线本地文件
+    try:
+        sh_kline = dm.load_local("index_000001.csv")
+        if sh_kline is not None and not sh_kline.empty:
+            st.session_state._trading_day = sh_kline["date"].iloc[-1]
+    except Exception:
+        st.session_state._trading_day = datetime.now()
+    
+    # 市场情绪（读本地，秒返回）
+    st.session_state._sentiment = df_.get_market_sentiment()
+    
+    s = dm.load_local("sectors.csv")
+    st.session_state._sector_df = s if (s is not None and not (hasattr(s, 'empty') and s.empty)) else df_.get_sector_spot()
+    c = dm.load_local("concept_sectors.csv")
+    st.session_state._concept_df = c if (c is not None and not (hasattr(c, 'empty') and c.empty)) else df_.get_concept_spot()
+    l = dm.load_local("limit_up.csv")
+    st.session_state._limit_up_df = l if (l is not None and not (hasattr(l, 'empty') and l.empty)) else df_.get_limit_up_stocks()
+    
+    st.session_state._realtime_cache = {}
+    
+    st.session_state._market_data_loaded = True
 
 # 从 session_state 读取数据
 indices_data = st.session_state.get("_indices_data", {})
@@ -257,18 +263,48 @@ for i, (name, data) in enumerate(indices_data.items()):
         st.metric(name, f"{price:.2f}" if price else "—", delta=f"{pct:+.2f}%" if pct else None, delta_color="inverse")
 
 # 情绪
+raw_sent = (sentiment or {}).get("sentiment", "") if isinstance(sentiment, dict) else ""
+_s = raw_sent.lstrip("🔥😊😐😟❄️💀").strip()
 with cols_idx[4]:
-    st.metric("市场情绪", sentiment.get("sentiment", "—") if sentiment else "—")
+    st.metric("市场情绪", _s if _s else "—")
 
 # --- 第二行：市场状态 ---
 st.markdown("---")
 cols_status = st.columns(6)
-if sentiment:
-    cols_status[0].metric("上涨家数", sentiment.get("up_count", 0))
-    cols_status[1].metric("下跌家数", sentiment.get("down_count", 0))
-    cols_status[2].metric("涨停", sentiment.get("zt_count", 0))
-    cols_status[3].metric("炸板率", f"{sentiment.get('zha_rate', 0):.1f}%")
-    cols_status[4].metric("成交额(亿)", f"{sentiment.get('total_amount', 0):.0f}" if sentiment.get("total_amount") else "—")
+if isinstance(sentiment, dict):
+    up = sentiment.get("up_count", 0)
+    down = sentiment.get("down_count", 0)
+    # 涨停/炸板从 limit_up 实时取
+    zt_df = st.session_state.get("_limit_up_df", pd.DataFrame())
+    zt_count = len(zt_df) if not zt_df.empty else sentiment.get("zt_count", 0)
+    if not zt_df.empty and "炸板次数" in zt_df.columns:
+        zha_count = int((zt_df["炸板次数"] > 0).sum())
+        zha_rate = zha_count / len(zt_df) * 100 if len(zt_df) > 0 else 0
+    else:
+        zha_rate = sentiment.get("zha_rate", 0)
+
+    total_amt = sentiment.get("total_amount", 0) or 0
+    # 成交额相较昨日变化
+    amt_delta_str = ""
+    try:
+        amt_kline = df_.get_index_kline("000001")
+        if amt_kline is not None and not amt_kline.empty and len(amt_kline) >= 2:
+            col = "amount" if "amount" in amt_kline.columns else ("volume" if "volume" in amt_kline.columns else None)
+            if col:
+                prev_val = float(amt_kline[col].iloc[-2])
+                if prev_val > 0:
+                    amt_change = (float(amt_kline[col].iloc[-1]) - prev_val) / prev_val * 100
+                    amt_delta_str = f"{amt_change:+.1f}%"
+    except Exception:
+        pass
+
+    cols_status[0].metric("上涨家数", f"{up}", delta=f"{sentiment.get('up_ratio', 0):.1f}%", delta_color="inverse")
+    cols_status[1].metric("下跌家数", f"{down}")
+    cols_status[2].metric("涨停", f"{zt_count}")
+    cols_status[3].metric("炸板率", f"{zha_rate:.1f}%")
+    cols_status[4].metric("成交额(亿)", f"{total_amt:.0f}" if total_amt else "—",
+                          delta=amt_delta_str if amt_delta_str else None,
+                          delta_color="inverse")
     cols_status[5].metric("涨跌比", f"{sentiment.get('up_ratio', 0):.1f}%" if sentiment.get("up_ratio") else "—")
 
 # --- 第三行：持仓快速预览 ---

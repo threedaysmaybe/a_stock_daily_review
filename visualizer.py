@@ -545,8 +545,20 @@ def plot_prediction_range(df: pd.DataFrame, prediction: dict, height: int = 400)
 # 9. ECharts K线图（支持缩放+拖动）
 # ============================================================
 
+def _build_marklines(sr: dict) -> list:
+    """把支撑/压力位转成 ECharts markLine 数据"""
+    if not sr:
+        return []
+    lines = []
+    for s in sr.get("supports", []):
+        lines.append({"yAxis": s["price"], "label": {"formatter": f"支撑 {s['label']} ¥{s['price']}", "color": "#34D399", "fontSize": 10, "position": "end"}})
+    for r in sr.get("resistances", []):
+        lines.append({"yAxis": r["price"], "label": {"formatter": f"压力 {r['label']} ¥{r['price']}", "color": "#F87171", "fontSize": 10, "position": "end"}})
+    return lines
+
 def plot_kline_echarts(df: pd.DataFrame, title: str = "K线图",
-                       ma_lines: list = None, height: int = 500) -> str:
+                       ma_lines: list = None, height: int = 500,
+                       sr_levels: dict = None) -> str:
     """
     生成 ECharts K线图 HTML（支持缩放+拖动）
     返回 HTML 字符串，用 components.html 渲染
@@ -683,6 +695,12 @@ def plot_kline_echarts(df: pd.DataFrame, title: str = "K线图",
                     "borderColor": "#DC143C",
                     "borderColor0": "#228B22",
                     "borderWidth": 1
+                },
+                "markLine": {
+                    "silent": True,
+                    "symbol": "none",
+                    "lineStyle": {"color": "#D4A853", "type": "dashed", "width": 1},
+                    "data": _build_marklines(sr_levels)
                 }
             }
         ]

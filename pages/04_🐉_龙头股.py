@@ -12,6 +12,7 @@ warnings.filterwarnings("ignore")
 
 import config as cfg
 import data_fetcher as df_
+import data_manager as dm
 import analyzer as anl
 import visualizer as viz
 from utils.helpers import fmt_cn
@@ -241,7 +242,8 @@ if not st.session_state._dragon_loaded:
             code = str(row.get("代码", "")).zfill(6)
             name = row.get("名称", "")
             
-            kdf = df_.get_stock_kline(code, days=120)
+            local_k = dm.load_local(f"stock_{code}.csv")
+            kdf = local_k if (local_k is not None and not (hasattr(local_k, 'empty') and local_k.empty)) else df_.get_stock_kline(code, days=120)
             if not kdf.empty:
                 kdf = anl.calc_all_indicators(kdf)
                 pred = anl.predict_next_day(kdf)

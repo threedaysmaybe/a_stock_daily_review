@@ -61,7 +61,11 @@ def download_all(progress_callback=None) -> dict:
                 progress_callback(i, total, name)
 
             result = task["fn"]()
-            if result is not None and not (isinstance(result, pd.DataFrame) and result.empty):
+            # 跳过 None、空 DataFrame、空 dict
+            empty = (result is None) or \
+                    (isinstance(result, pd.DataFrame) and result.empty) or \
+                    (isinstance(result, dict) and not result)
+            if not empty:
                 _save(task, result, today)
                 ok += 1
                 files.append(task["filename"])
@@ -82,14 +86,49 @@ def download_all(progress_callback=None) -> dict:
     with open(os.path.join(today, "_meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
-    if progress_callback:
-        progress_callback(total - 1, total, "检查缺失数据并回补...")
+    # 扫描缺失板块数据（不在此回补，返回列表给 app 层控制进度）
+    meta["backfill_needed"] = _scan_missing_dates(today, max_days=2)
 
-    # 回补缺失的历史交易日板块数据
-    backfilled = _backfill_missing_dates(today)
+    return meta
 
-    if progress_callback:
-        progress_callback(total - 1, total, "写入完成，即将刷新...")
+
+def _scan_missing_dates(today_dir: str, max_days: int = 2) -> list:
+    """扫描最近 N 个交易日缺失的板块数据，返回 [(date_str, kind), ...]"""
+    missing = []
+    if not os.path.exists(DATA_ROOT):
+        return missing
+    index_path = os.path.join(today_dir, "index_000001.csv")
+    if not os.path.exists(index_path):
+        return missing
+    try:
+        idx_df = pd.read_csv(index_path, encoding="utf-8-sig")
+        if idx_df.empty or "date" not in idx_df.columns:
+            return missing
+        idx_df["date"] = pd.to_datetime(idx_df["date"])
+        last_date = idx_df["date"].iloc[-1]
+        trading_days = idx_df[idx_df["date"] >= last_date - timedelta(days=14)]["date"]
+        trading_days = sorted(set(d.dt.strftime("%Y%m%d") for d in trading_days))
+        trading_days = trading_days[-max_days:]
+    except Exception:
+        return missing
+
+    for date_str in trading_days:
+        d = os.path.join(DATA_ROOT, date_str)
+        if not os.path.exists(os.path.join(d, "sectors.csv")):
+            missing.append((date_str, "sectors"))
+        if not os.path.exists(os.path.join(d, "concept_sectors.csv")):
+            missing.append((date_str, "concepts"))
+    return missing
+
+
+def backfill_one(date_str: str, kind: str) -> bool:
+    """回补单条板块数据"""
+    target_dir = os.path.join(DATA_ROOT, date_str)
+    os.makedirs(target_dir, exist_ok=True)
+    if kind == "sectors":
+        return _try_backfill_sectors(target_dir, date_str)
+    else:
+        return _try_backfill_concepts(target_dir, date_str)
 
     return meta
 
@@ -168,13 +207,22 @@ def _build_task_list() -> list:
 # ============================================================
 
 def _download_index_kline(code: str) -> pd.DataFrame:
-    """下载指数K线（新浪源）"""
+    """下载指数K线（东方财富源，含成交额）"""
     prefix = "sh" if code.startswith("000") or code.startswith("60") else "sz"
-    df = ak.stock_zh_index_daily(symbol=f"{prefix}{code}")
-    if df is not None and not df.empty:
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.sort_values("date").tail(120).reset_index(drop=True)
-    return df
+    try:
+        df = ak.stock_zh_index_daily_em(symbol=f"{prefix}{code}", start_date="20200101", end_date="20991231")
+        if df is not None and not df.empty:
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date").tail(120).reset_index(drop=True)
+        return df or pd.DataFrame()
+    except Exception:
+        # 兜底：新浪源（无amount列）
+        df = ak.stock_zh_index_daily(symbol=f"{prefix}{code}")
+        if df is not None and not df.empty:
+            df["date"] = pd.to_datetime(df["date"])
+            df["amount"] = 0
+            df = df.sort_values("date").tail(120).reset_index(drop=True)
+        return df or pd.DataFrame()
 
 
 def _download_sectors() -> pd.DataFrame:
@@ -250,17 +298,26 @@ def _download_concept_sectors() -> pd.DataFrame:
     return pd.DataFrame()
 
 def _download_sentiment() -> dict:
-    """下载市场情绪"""
+    """市场情绪：从已下载的行业数据和上证K线推算"""
     try:
-        spot = ak.stock_zh_a_spot_em()
-        if spot is None or spot.empty:
-            return {}
-        pct_col = "涨跌幅"
-        up = len(spot[spot[pct_col].apply(lambda x: _to_float(x) or 0) > 0])
-        down = len(spot[spot[pct_col].apply(lambda x: _to_float(x) or 0) < 0])
-        flat = len(spot) - up - down
-        total_amt = spot["成交额"].apply(lambda x: _to_float(x) or 0).sum() / 1e8
-
+        td = _today_str()
+        up, down = 0, 0
+        sectors_path = os.path.join(DATA_ROOT, td, "sectors.csv")
+        if os.path.exists(sectors_path):
+            sectors = pd.read_csv(sectors_path)
+            if "up_count" in sectors.columns:
+                up = int(sectors["up_count"].sum())
+            if "down_count" in sectors.columns:
+                down = int(sectors["down_count"].sum())
+        
+        total_amt = 0
+        kline_path = os.path.join(DATA_ROOT, td, "index_000001.csv")
+        if os.path.exists(kline_path):
+            idx = pd.read_csv(kline_path)
+            col = "amount" if "amount" in idx.columns else ("volume" if "volume" in idx.columns else None)
+            if col and not idx.empty:
+                total_amt = float(idx[col].iloc[-1]) / 1e8  # 元→亿元
+        
         ratio = up / (up + down) if (up + down) > 0 else 0.5
         if ratio > 0.8: sent = "极度亢奋"
         elif ratio > 0.65: sent = "偏暖"
@@ -268,13 +325,15 @@ def _download_sentiment() -> dict:
         elif ratio > 0.35: sent = "偏冷"
         elif ratio > 0.2: sent = "冰点"
         else: sent = "恐慌"
-
+        
         return {
-            "up_count": up, "down_count": down, "flat_count": flat,
-            "up_ratio": round(up / len(spot) * 100, 1) if len(spot) > 0 else 0,
+            "up_count": up, "down_count": down, "flat_count": 0,
+            "up_ratio": round(ratio * 100, 1),
             "total_amount": round(total_amt, 0),
             "sentiment": sent,
         }
+    except Exception:
+        return {}
     except Exception:
         return {}
 
@@ -367,18 +426,10 @@ def _download_stock_list() -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def _backfill_missing_dates(today_dir: str) -> int:
-    """回补最近10个交易日内缺失的板块排名数据，返回回补天数"""
+def _backfill_missing_dates(today_dir: str, max_days: int = 2, progress_callback=None) -> int:
+    """回补最近 N 个交易日内缺失的板块排名数据，返回回补天数"""
     if not os.path.exists(DATA_ROOT):
         return 0
-    
-    # 收集所有可用的日期目录
-    all_dirs = sorted([d for d in os.listdir(DATA_ROOT) 
-                       if os.path.isdir(os.path.join(DATA_ROOT, d)) and d.isdigit()])
-    if not all_dirs:
-        return 0
-    
-    # 读取今天的上证指数K线，获取最近10个交易日列表
     index_path = os.path.join(today_dir, "index_000001.csv")
     if not os.path.exists(index_path):
         return 0
@@ -388,27 +439,33 @@ def _backfill_missing_dates(today_dir: str) -> int:
         if idx_df.empty or "date" not in idx_df.columns:
             return 0
         idx_df["date"] = pd.to_datetime(idx_df["date"])
-        # 最近10个交易日
         last_date = idx_df["date"].iloc[-1]
         trading_days = idx_df[idx_df["date"] >= last_date - timedelta(days=14)]["date"]
         trading_days = sorted(set(d.dt.strftime("%Y%m%d") for d in trading_days))
-        trading_days = trading_days[-10:]  # 最多回补10天
+        trading_days = trading_days[-max_days:]
     except Exception:
         return 0
     
-    backfilled = 0
+    # 先扫描缺失项，确定总数
+    missing = []
     for date_str in trading_days:
+        d = os.path.join(DATA_ROOT, date_str)
+        if not os.path.exists(os.path.join(d, "sectors.csv")):
+            missing.append((date_str, 'sectors'))
+        if not os.path.exists(os.path.join(d, "concept_sectors.csv")):
+            missing.append((date_str, 'concepts'))
+    if not missing:
+        return 0
+    
+    backfilled = 0
+    for i, (date_str, kind) in enumerate(missing):
+        if progress_callback:
+            progress_callback(i, len(missing), f"回补 {date_str} {kind}...")
         target_dir = os.path.join(DATA_ROOT, date_str)
-        
-        # 检查是否需要回补行业板块
-        sector_path = os.path.join(target_dir, "sectors.csv")
-        if not os.path.exists(sector_path):
+        if kind == 'sectors':
             if _try_backfill_sectors(target_dir, date_str):
                 backfilled += 1
-        
-        # 检查是否需要回补概念板块
-        concept_path = os.path.join(target_dir, "concept_sectors.csv")
-        if not os.path.exists(concept_path):
+        else:
             if _try_backfill_concepts(target_dir, date_str):
                 backfilled += 1
     
