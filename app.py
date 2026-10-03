@@ -134,8 +134,9 @@ else:
 st.sidebar.caption(f"上次更新：{latest if latest else '无'}")
 
 if st.sidebar.button("🔄 更新数据 & 重新分析", use_container_width=True, type="primary"):
-    progress_bar = st.progress(0, text="⏳ 准备下载...")
-    status_text = st.empty()
+    # 进度条放侧边栏，避免遮挡主页、避免"卡在主页"的观感
+    progress_bar = st.sidebar.progress(0, text="⏳ 准备下载...")
+    status_text = st.sidebar.empty()
 
     def on_progress(i, total, name):
         pct = min((i + 1) / total, 0.95) if total > 0 else 0.95
@@ -161,7 +162,6 @@ if st.sidebar.button("🔄 更新数据 & 重新分析", use_container_width=Tru
     # （stock_data_collect.py 逐只跑 subprocess，很慢，且非每日复盘必需）
 
     progress_bar.progress(1.0, text="✅ 全部完成，正在刷新...")
-    time.sleep(0.3)
     progress_bar.empty()
     status_text.empty()
     if meta["ok"] > 0:
