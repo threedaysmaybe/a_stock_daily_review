@@ -225,7 +225,7 @@ with tab_limit:
                     progress_bar.progress((idx + 1) / total, text=f"分析中 ({idx+1}/{total}) {name}")
                 progress_bar.empty()
                 st.session_state._dragon_loaded = True
-                st.rerun()
+                # 不调用 st.rerun()（在 tabs 里会触发 DeltaGenerator 异常），结果已存 _dragon_analyzed，直接继续渲染
 
         render_ladder_board(limit_up_df)
 

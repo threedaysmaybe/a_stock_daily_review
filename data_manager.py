@@ -649,7 +649,19 @@ def _download_northbound() -> pd.DataFrame:
 
 
 def _download_stock_list() -> pd.DataFrame:
-    """下载全市场股票列表（代码+名称，供搜索用）"""
+    """下载全市场股票列表（代码+名称，供搜索用）。优先 Tushare（快、稳定）。"""
+    # 优先 Tushare stock_basic（快、稳定，不封）
+    try:
+        from tushare_source import TushareSource
+        src = TushareSource(cfg.TUSHARE_TOKEN)
+        df = src.pro.stock_basic(exchange="", list_status="L", fields="ts_code,name")
+        if df is not None and not df.empty:
+            df = df.copy()
+            df["code"] = df["ts_code"].str.split(".").str[0]
+            return pd.DataFrame({"code": df["code"], "name": df["name"]})
+    except Exception:
+        pass
+    # 兜底：东财
     import akshare as ak
     for src in ['em', 'sina']:
         try:
