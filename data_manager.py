@@ -110,6 +110,30 @@ def download_all(progress_callback=None) -> dict:
             # print(f"[SKIP] {name}: {e}")
         time.sleep(0.05)  # 避免请求太快
 
+    # 涨停股 K 线（手机涨停股分析需要，否则云端无快照会实时拉慢）
+    limit_path = os.path.join(today, "limit_up.csv")
+    if os.path.exists(limit_path):
+        try:
+            limit_df = pd.read_csv(limit_path, encoding="utf-8-sig")
+            if "代码" in limit_df.columns:
+                zt_codes = [str(c).zfill(6) for c in limit_df["代码"].tolist()]
+                for c in zt_codes:
+                    if os.path.exists(os.path.join(today, f"stock_{c}.csv")):
+                        continue  # 已有（可能是持仓股），跳过
+                    try:
+                        kdf = _download_stock_kline(c)
+                        if kdf is not None and not kdf.empty:
+                            _save({"filename": f"stock_{c}.csv"}, kdf, today)
+                            ok += 1
+                            files.append(f"stock_{c}.csv")
+                        else:
+                            fail += 1
+                    except Exception:
+                        fail += 1
+                    time.sleep(0.05)
+        except Exception:
+            pass
+
     # 保存元信息
     meta = {
         "date": _today_str(),
