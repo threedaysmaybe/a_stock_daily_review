@@ -12,3 +12,6 @@ __pycache__/
 
 # streamlit 自动生成的符号链接
 .agents/
+
+# Tushare token（本地文件，不提交）
+token.txt

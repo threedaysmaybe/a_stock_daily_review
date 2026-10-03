@@ -91,7 +91,30 @@ CACHE_TTL = 3600  # 缓存1小时（秒）
 # ============================================================
 # 📌 Tushare 官方 API（龙虎榜、北向资金，2000积分即可）
 # ============================================================
-TUSHARE_TOKEN = "bbc6d804f5903ec6d7b3922bfde2a028b05524c51d649bbeaa2885a4"
+import os
+
+
+def _load_tushare_token():
+    """读取 Tushare token：Streamlit Secrets 优先 → 环境变量 → 本地 token.txt（不提交 git）。"""
+    try:
+        import streamlit as st
+        if st.secrets.get("TUSHARE_TOKEN"):
+            return st.secrets["TUSHARE_TOKEN"]
+    except Exception:
+        pass
+    token = os.environ.get("TUSHARE_TOKEN")
+    if token:
+        return token
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "token.txt")
+    if os.path.exists(p):
+        with open(p, "r", encoding="utf-8") as f:
+            t = f.read().strip()
+            if t:
+                return t
+    return ""
+
+
+TUSHARE_TOKEN = _load_tushare_token()
 
 # ============================================================
 # 📌 板块列表（申万一级行业）
