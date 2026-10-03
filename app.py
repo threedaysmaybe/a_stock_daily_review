@@ -35,7 +35,7 @@ from utils.ui import inject_css, conclusion, pct_color
 # ============================================================
 st.set_page_config(
     page_title="每日A股复盘",
-    page_icon="📊",
+    page_icon="stock.png",
     layout="wide",
     initial_sidebar_state="expanded",
 )
