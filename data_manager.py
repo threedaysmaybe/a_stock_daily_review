@@ -253,6 +253,23 @@ def _build_task_list() -> list:
         "fn": _download_limit_up,
     })
 
+    # 5.5 龙虎榜、资金流、北向（资金情绪页用）
+    tasks.append({
+        "name": "龙虎榜",
+        "filename": "lhb.csv",
+        "fn": _download_lhb_tushare,
+    })
+    tasks.append({
+        "name": "市场资金流",
+        "filename": "market_fund_flow.csv",
+        "fn": _download_market_fund_flow,
+    })
+    tasks.append({
+        "name": "北向资金",
+        "filename": "northbound.csv",
+        "fn": _download_northbound,
+    })
+
     # 6. 股票列表（搜索用）
     tasks.append({
         "name": "全市场股票列表",
@@ -568,6 +585,67 @@ def _download_lhb() -> pd.DataFrame:
     if dfs:
         return pd.concat(dfs, ignore_index=True)
     return pd.DataFrame()
+
+
+def _download_lhb_tushare() -> pd.DataFrame:
+    """龙虎榜席位明细（Tushare top_inst，近5日，稳定不封）。"""
+    try:
+        from tushare_source import TushareSource
+        src = TushareSource(cfg.TUSHARE_TOKEN)
+        dfs = []
+        for i in range(5):
+            date_str = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
+            try:
+                inst = src.get_lhb_inst(date_str)
+                if inst is not None and not inst.empty:
+                    dfs.append(inst)
+            except Exception:
+                continue
+            time.sleep(0.1)
+        if not dfs:
+            return pd.DataFrame()
+        return pd.concat(dfs, ignore_index=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _download_market_fund_flow() -> pd.DataFrame:
+    """全市场资金流（Tushare moneyflow 聚合近10日）。"""
+    try:
+        from tushare_source import TushareSource
+        src = TushareSource(cfg.TUSHARE_TOKEN)
+        cal = src.pro.trade_cal(exchange="SSE", is_open="1", end_date=datetime.now().strftime("%Y%m%d"))
+        tds = sorted(cal["cal_date"].tolist())[-10:] if cal is not None and not cal.empty else []
+        rows = []
+        for td in tds:
+            mf = src.pro.moneyflow(trade_date=td)
+            if mf is None or mf.empty:
+                continue
+            main_net = (mf["buy_lg_amount"] + mf["buy_elg_amount"] - mf["sell_lg_amount"] - mf["sell_elg_amount"]).sum()
+            elg_net = (mf["buy_elg_amount"] - mf["sell_elg_amount"]).sum()
+            lg_net = (mf["buy_lg_amount"] - mf["sell_lg_amount"]).sum()
+            md_net = (mf["buy_md_amount"] - mf["sell_md_amount"]).sum()
+            sm_net = (mf["buy_sm_amount"] - mf["sell_sm_amount"]).sum()
+            rows.append({
+                "日期": td, "主力净流入-净额": main_net, "超大单净流入-净额": elg_net,
+                "大单净流入-净额": lg_net, "中单净流入-净额": md_net, "小单净流入-净额": sm_net,
+            })
+            time.sleep(0.1)
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _download_northbound() -> pd.DataFrame:
+    """北向资金（Tushare moneyflow_hsgt）。"""
+    try:
+        from tushare_source import TushareSource
+        src = TushareSource(cfg.TUSHARE_TOKEN)
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+        return src.get_northbound(start, end)
+    except Exception:
+        return pd.DataFrame()
 
 
 def _download_stock_list() -> pd.DataFrame:

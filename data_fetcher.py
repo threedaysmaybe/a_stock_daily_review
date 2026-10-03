@@ -96,9 +96,9 @@ def get_index_kline(index_code: str, days: int = 120) -> pd.DataFrame:
     """获取指数日K线（Tushare index_daily 优先，稳定不封）。"""
     local = dm.load_local(f"index_{index_code}.csv")
     if local is not None and not local.empty and "date" in local.columns:
-        latest = pd.to_datetime(local["date"]).max()
-        if (datetime.now() - latest).days <= 2:  # 缓存未过期（2天内）
-            return local
+        return local  # 有快照就用，不判断过期
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()  # 只读快照模式，无快照返回空
     try:
         src = _get_tushare()
         ts_map = {"000001": "000001.SH", "399001": "399001.SZ", "399006": "399006.SZ", "000688": "000688.SH"}
@@ -228,6 +228,8 @@ def get_sector_spot() -> pd.DataFrame:
         result = local.sort_values("change_pct", ascending=False).reset_index(drop=True)
     
     if result is None:
+        if not cfg.ALLOW_REALTIME_API:
+            return pd.DataFrame()  # 只读快照模式，无快照返回空
         try:
             df = ak.stock_board_industry_summary_ths()
             if df is not None and not df.empty:
@@ -284,6 +286,8 @@ def get_concept_spot() -> pd.DataFrame:
         result = local
     
     if result is None:
+        if not cfg.ALLOW_REALTIME_API:
+            return pd.DataFrame()  # 只读快照模式，无快照返回空
         try:
             url = "https://q.10jqka.com.cn/gn/"
             headers = {
@@ -431,9 +435,9 @@ def get_stock_kline(code: str, days: int = 120) -> pd.DataFrame:
     code = _fmt_code(code)
     local = dm.load_local(f"stock_{code}.csv")
     if local is not None and not local.empty and "date" in local.columns:
-        latest = pd.to_datetime(local["date"]).max()
-        if (datetime.now() - latest).days <= 2:  # 缓存未过期才用
-            return local
+        return local  # 有快照就用，不判断过期（数据更新靠「更新数据」按钮）
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()  # 只读快照模式，无快照返回空
     try:
         prefix = "sh" if code.startswith("6") else "sz"
         df = ak.stock_zh_a_daily(symbol=f"{prefix}{code}", adjust="qfq")
@@ -552,6 +556,8 @@ def get_market_fund_flow() -> pd.DataFrame:
     local = dm.load_local("market_fund_flow.csv")
     if local is not None and not local.empty:
         return local
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         df = ak.stock_market_fund_flow()
         if df is not None and not df.empty:
@@ -590,11 +596,18 @@ def get_market_fund_flow() -> pd.DataFrame:
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_northbound(days: int = 10) -> pd.DataFrame:
     """北向资金（沪深港通，Tushare moneyflow_hsgt）。"""
+    local = dm.load_local("northbound.csv")
+    if local is not None and not local.empty:
+        return local
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         end = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
         df = src.get_northbound(start, end)
+        if df is not None and not df.empty:
+            dm.save_local(df, "northbound.csv")
         return df if df is not None else pd.DataFrame()
     except Exception:  # noqa: BLE001
         return pd.DataFrame()
@@ -758,7 +771,13 @@ def _ts_inst_to_lhb(inst_df: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_lhb_recent(days: int = 10) -> pd.DataFrame:
     """获取近N天龙虎榜席位明细（Tushare top_inst，稳定不封）。"""
-    # 直接查 Tushare（@st.cache_data 已做 1 小时缓存，不再读本地旧缓存避免过期）
+    local = dm.load_local("lhb.csv")
+    if local is None or local.empty:
+        local = dm.load_local(f"lhb_{days}.csv")
+    if local is not None and not local.empty:
+        return local
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         dfs = []
@@ -850,6 +869,8 @@ def get_limit_up_stocks() -> pd.DataFrame:
     local = dm.load_local("limit_up.csv")
     if local is not None and not local.empty:
         return local
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         df = ak.stock_zt_pool_em(date=datetime.now().strftime("%Y%m%d"))
         if df is None or df.empty:
@@ -869,6 +890,8 @@ def get_market_sentiment() -> dict:
     local = dm.load_local("sentiment.json")
     if local:
         return local
+    if not cfg.ALLOW_REALTIME_API:
+        return {}
     # 优先 Tushare：全市场涨跌家数（稳定不封）
     try:
         src = _get_tushare()
