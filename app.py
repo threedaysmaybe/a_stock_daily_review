@@ -10,6 +10,7 @@
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import os
@@ -40,27 +41,41 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ============================================================
-# 手机主屏幕图标（PNG 硬编码）
-# ============================================================
-png_b64 = "iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAYAAAA9zQYyAAAAAXNSR0IArs4c6QAAAARzQklUCAgICHwIZAAAAAlwSFlzAAAOxAAADsQBlSsOGwAABTdJREFUeJzt3b9rFGUcB/Dv8+71LpIYSDCkUAhFW2jBmLaTg0PTQBcddHHwD3BwchR0EDoICq7+g4Oii6Cbg5OLIDhIhUAx0CC4xFBIUyhJ1AvJ3c3d876P93vnlS5JSC7v7nP3PfcB32d4873nnu/znr3nnu+3AIC/rFdbAAAAGIEALYAAAVAaQIEALQEKoIUAzksAIIuDg6YoEABorEGDEiCgNIIIiICIAMmIi5mIiJm5AABmMxERMzMREQPGDAQQMxMAxKxBAUGjBgQNmgYFDBqGBAgIOBgAlFEHkogkInnVgSCKCIBJREwIWCbq0RZRDwQYiPq0iegDQQyiDkgYgrjtcLgR9ekS0TtBGKJOyKj9CQQRoJh6eB9mItoe7m2W1zAzEMQJYBD1wCBiBsrph5u8E6GJQWAKhJ4JAhNgLSTbw8MZtpcKxMCXQxSkDYIGoKCqLL9LAGmpN8paHSB4bG8DKw/onKAVa1ICDmTACLKKqwd0FvRRu69IxIF2DQjCgG+1C/ZA/b5e5dTj2KCxHL4Z57yHpykGgZBApBOPJntp4gQChBPm0kIaT8L3S1GiLkAAhAygFdoLz7aYq2E3Hgq8PKDLPgCB6RlVAYpAIK5fA7T7vVYdyA9q1GqlARlqZDC0W3nEGYDW+4DqQhJ5ANqPR+xUPqCns27/LS6bj9U2M1WPqEY8MFgGq4AURh6AWQW49sxsmHywM5mFpUxEEBEBKbEBbR1LZjaAOI8A9BLCWbmpK4Cd+RcBTuyt8fUc8ABz4Sx+2bmCty9epmPJJAJBCPXh7pJzQCPSjTjVSMMx17iYOAi7n1U8zCY2oH4ePnGWItKAQCigYQVs3ECvNal32gON+HH+GEKgMYR4DJDm/BFrsF6X7m56vW2KB8wXl3j9yzzCbIbjETMAk3SYzvVj2akHYiJmzpeRw+2P4pqZAwYzCbMxExHLF+SDedMAMwjh+4dm8Mkkq90m8/AN3uH4kZc3/IEsJoK9cIErmUnSmIQAAgAIM5NIpuUxAQEAAAAAAAAAUKrJD0o8vQH8rxq1gQd/KQUNUArkgbpAw7BqAAEVGgp3IYgEKMDTCxTkkyM0KADiUIMoaBAUs2VBOkAgjfouklBAjfKJt1Z4dAYgKzCg1Y0/Ub3u/7sL3qrySEwm5BSBWdAv7N3mB+0HdHk5AgAx9LgdBW23tNcQrH5v9p2pXaM9txsp4m6GC0i4fIfsB7r9Bp4/lpcQW9s9ryMWAkxCHZPqUZn9AHT8AUCFGJSCmhhAmqYBEpAQURK1t0FpACAKCiUACAZBNoCoYHlQEgBQBiAkgKJS9e1IAFgBCEhALiAJAgCUiOUZxQKyAclZBuR1DYiBAcD6rR2lT0MAzE+IgMREZMPGiwN/B0AIKt3cCgMqADWmBEFQSfTLt7h2vIR/y3OIVB0NEwlIeWwpYF1Wx2lVFQs0jUBm0icvt2l5sMDiwiJLl32JwBwlqQCItFcPxDDmmTQDxByHqoqi5YVM1Gq91aI9c1HLtIhWWjRbS2iGmX22bj9A7V5QjduPHEG5OxrFASLrdM1R8zS/BOQD9D+H/pa+xcIPUBJQJD17tEV8eY4Pnj4jDprQYKqUziU3M8gKfVp8qyHshlMWEaqU7qW8ZmCmiX8vR2BmA4CpDAQMUwFJSaPkllsCsBjvYALMQkQEFCAgZkJABGgAoCFOSgEACMB/4h/JApxJ6OMxjwAAAABJRU5ErkJggg=="
-
 st.markdown(f"""
-<!-- 手机主屏幕图标 - iOS -->
-<link rel="apple-touch-icon" sizes="180x180" href="data:image/png;base64,{png_b64}">
-<link rel="apple-touch-icon" sizes="152x152" href="data:image/png;base64,{png_b64}">
-<link rel="apple-touch-icon" sizes="120x120" href="data:image/png;base64,{png_b64}">
-
-<!-- 手机主屏幕图标 - Android -->
-<link rel="icon" type="image/png" sizes="192x192" href="data:image/png;base64,{png_b64}">
-<link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,{png_b64}">
-
-<!-- PWA 配置 -->
+<!-- 手机主屏幕图标（保留 title/theme 等 meta） -->
 <meta name="apple-mobile-web-app-title" content="A股复盘">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#1a73e8">
 """, unsafe_allow_html=True)
+
+# 动态注入 apple-touch-icon 到顶层 head（iOS「添加到主屏幕」图标）
+# Streamlit 只能往 body 注入 HTML，需用 JS 操作 parent document 的 head
+components.html(
+    """
+    <script>
+    (function() {
+        try {
+            const parentDoc = window.parent.document;
+            const head = parentDoc.head || parentDoc.getElementsByTagName('head')[0];
+            const iconUrl = window.location.origin + '/app/static/apple-touch-icon.png';
+            ['180x180', '152x152', '120x120'].forEach(function(sz) {
+                let link = parentDoc.querySelector('link[rel="apple-touch-icon"][sizes="' + sz + '"]');
+                if (!link) {
+                    link = parentDoc.createElement('link');
+                    link.rel = 'apple-touch-icon';
+                    link.sizes = sz;
+                    head.appendChild(link);
+                }
+                link.href = iconUrl;
+            });
+        } catch (e) {}
+    })();
+    </script>
+    """,
+    height=0,
+    width=0,
+)
 
 # ============================================================
 # 加载持仓（统一走 data_manager，代码规范化，全页面一致）
