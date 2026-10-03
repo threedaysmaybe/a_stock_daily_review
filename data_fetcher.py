@@ -29,6 +29,21 @@ def _get_tushare() -> TushareSource:
     return _tushare
 
 
+def _snapshot_fresh(max_days: int = 2) -> bool:
+    """本地快照是否新鲜（N天内）。
+
+    云端（Streamlit Cloud）的 data/ 快照来自 Git，会过期；过期就应实时调 API。
+    """
+    latest = dm.get_latest_date()
+    if not latest:
+        return False
+    try:
+        latest_dt = datetime.strptime(str(latest), "%Y%m%d")
+        return (datetime.now() - latest_dt).days <= max_days
+    except Exception:
+        return False
+
+
 _LAST_THS_REQUEST = 0.0
 _THS_MIN_INTERVAL = 1.0  # 同花顺请求最小间隔（秒），防封
 
@@ -206,7 +221,7 @@ def get_sector_spot() -> pd.DataFrame:
     if get_sector_spot._cache is not None and now - get_sector_spot._time < 30:
         return get_sector_spot._cache.copy()
     
-    local = dm.load_local("sectors.csv")
+    local = dm.load_local("sectors.csv") if _snapshot_fresh() else None
     result = None
     if local is not None and not local.empty:
         # 重命名中文列名为英文
@@ -271,7 +286,7 @@ def get_concept_spot() -> pd.DataFrame:
     if get_concept_spot._cache is not None and now - get_concept_spot._time < 30:
         return get_concept_spot._cache.copy()
     
-    local = dm.load_local("concept_sectors.csv")
+    local = dm.load_local("concept_sectors.csv") if _snapshot_fresh() else None
     result = None
     if local is not None and not local.empty:
         # 补全缺失列
@@ -866,9 +881,10 @@ def get_limit_up_stocks() -> pd.DataFrame:
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_market_sentiment() -> dict:
     """综合市场情绪指标"""
-    local = dm.load_local("sentiment.json")
-    if local:
-        return local
+    if _snapshot_fresh():
+        local = dm.load_local("sentiment.json")
+        if local:
+            return local
     # 优先 Tushare：全市场涨跌家数（稳定不封）
     try:
         src = _get_tushare()
