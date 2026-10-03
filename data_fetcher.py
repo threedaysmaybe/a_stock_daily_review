@@ -394,6 +394,8 @@ def get_sector_fund_flow_rank() -> pd.DataFrame:
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_concept_fund_flow_rank() -> pd.DataFrame:
     """获取概念板块资金流向排名"""
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         df = ak.stock_sector_fund_flow_rank()
         if df is not None and not df.empty:
@@ -420,6 +422,8 @@ def get_sector_fund_flow_history(days: int = 5) -> pd.DataFrame:
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_concept_fund_flow_history(days: int = 5) -> pd.DataFrame:
     """获取概念板块历史资金流向"""
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         df = ak.stock_sector_fund_flow_rank()
         if df is not None and not df.empty:
@@ -1226,6 +1230,8 @@ def get_stock_release(code: str) -> pd.DataFrame:
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_lhb_trader_detail(days: int = 5) -> pd.DataFrame:
     """获取龙虎榜个股-营业部明细，含游资名映射"""
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     end = datetime.now()
     start = end - timedelta(days=days)
     date_str = end.strftime("%Y%m%d")
@@ -1303,6 +1309,8 @@ def get_industry_leaders(top_n: int = 2) -> pd.DataFrame:
     返回列：trade_date, industry, ts_code, name, total_mv(万), circ_mv(万),
             turnover_rate, pe, pb, pct_chg
     """
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         # 最近交易日
@@ -1359,6 +1367,8 @@ def get_stock_valuation(code: str) -> dict:
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_industry_pct() -> dict:
     """申万行业涨跌（Tushare daily + stock_basic 自己算，与龙头 industry 同一套分类）。"""
+    if not cfg.ALLOW_REALTIME_API:
+        return {}
     try:
         src = _get_tushare()
         cal = src.pro.trade_cal(exchange="SSE", is_open="1", end_date=datetime.now().strftime("%Y%m%d"))
