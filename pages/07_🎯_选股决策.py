@@ -307,7 +307,10 @@ with tab_limit:
                 trend_cols[1].info(f"**中期趋势**\n\n{trend.get('mid_signal', '—')}")
                 trend_cols[2].info(f"**MACD信号**\n\n{trend.get('macd_signal', '—')}")
                 patterns = anl.detect_patterns(kdf)
-                trend_cols[3].warning(f"**K线形态**\n\n" + "\n".join(patterns)) if patterns else trend_cols[3].info("**K线形态**\n\n无明显形态")
+                if patterns:
+                    trend_cols[3].warning(f"**K线形态**\n\n" + "\n".join(patterns))
+                else:
+                    trend_cols[3].info("**K线形态**\n\n无明显形态")
 
                 st.subheader("🔮 明日预测")
                 pred_cols = st.columns(3)
