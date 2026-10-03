@@ -345,6 +345,8 @@ get_concept_spot._time = 0
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_sector_fund_flow_rank() -> pd.DataFrame:
     """获取板块资金流向（从同花顺 gnSection 解析 zjjlr）"""
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         import requests
         import json
@@ -404,6 +406,8 @@ def get_concept_fund_flow_rank() -> pd.DataFrame:
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_sector_fund_flow_history(days: int = 5) -> pd.DataFrame:
     """获取板块历史资金流向"""
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         df = ak.stock_sector_fund_flow_rank()
         if df is not None and not df.empty:
@@ -475,6 +479,8 @@ def get_stock_kline(code: str, days: int = 120) -> pd.DataFrame:
 def get_stock_realtime(code: str) -> dict:
     """获取个股实时行情（优先新浪源）"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return {}  # 只读快照模式，实时行情返回空，调用方会回退到K线收盘价
     try:
         df = ak.stock_zh_a_spot()
         if df is not None and not df.empty:
@@ -620,6 +626,8 @@ def get_stock_financial(code: str) -> dict:
     local = dm.load_local(f"stock_{code}_fin.json")
     if local:
         return local
+    if not cfg.ALLOW_REALTIME_API:
+        return {}
     try:
         src = _get_tushare()
         ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
@@ -680,6 +688,8 @@ def get_stock_financial(code: str) -> dict:
 def get_stock_fund_factors(code: str, days: int = 20) -> pd.DataFrame:
     """个股资金面因子历史（主力净流入 + 换手率 + 量比），供预测模型用。"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     ts_code = code + (".SH" if code.startswith("6") else ".SZ")
     try:
         src = _get_tushare()
@@ -706,6 +716,8 @@ def get_stock_fund_factors(code: str, days: int = 20) -> pd.DataFrame:
 def get_stock_fund_flow(code: str) -> dict:
     """获取个股资金流向"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return {}
     try:
         df = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith("6") else "sz")
         if df is None or df.empty:
@@ -974,6 +986,8 @@ def _classify_sentiment(up: int, down: int) -> str:
 def get_stock_zygc(code: str) -> pd.DataFrame:
     """获取主营业务构成（Tushare fina_mainbz，稳定）。"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
@@ -1011,6 +1025,8 @@ def get_stock_zygc(code: str) -> pd.DataFrame:
 def get_stock_top10(code: str) -> pd.DataFrame:
     """获取十大股东（Tushare top10_holders，稳定）。"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
@@ -1038,6 +1054,8 @@ def get_stock_top10(code: str) -> pd.DataFrame:
 def get_stock_top10_free(code: str) -> pd.DataFrame:
     """获取十大流通股东（Tushare top10_floatholders，稳定）。"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
@@ -1065,6 +1083,8 @@ def get_stock_top10_free(code: str) -> pd.DataFrame:
 def get_stock_research(code: str) -> pd.DataFrame:
     """获取机构研报（Tushare report_rc，稳定）。"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
@@ -1112,6 +1132,8 @@ def get_stock_news(code: str) -> pd.DataFrame:
 def get_stock_dividend(code: str) -> pd.DataFrame:
     """获取历史分红（Tushare dividend，稳定）。"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
