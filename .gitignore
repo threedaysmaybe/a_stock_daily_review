@@ -1,0 +1,14 @@
+# Python 编译缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 备份文件
+*.bak
+
+# 临时/本地文件
+*.tmp
+.DS_Store
+
+# streamlit 自动生成的符号链接
+.agents/

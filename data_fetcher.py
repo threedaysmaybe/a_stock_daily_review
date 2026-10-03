@@ -16,14 +16,51 @@ import re
 
 import config as cfg
 import data_manager as dm
+from tushare_source import TushareSource
+
+_tushare = None
+
+
+def _get_tushare() -> TushareSource:
+    """Tushare 数据源单例（龙虎榜/北向资金）。"""
+    global _tushare
+    if _tushare is None:
+        _tushare = TushareSource(cfg.TUSHARE_TOKEN)
+    return _tushare
+
+
+_LAST_THS_REQUEST = 0.0
+_THS_MIN_INTERVAL = 1.0  # 同花顺请求最小间隔（秒），防封
+
+
+def _ths_request(url: str, headers: dict = None, timeout: int = 10, retries: int = 3):
+    """同花顺网页请求（降频 + 失败重试，防封）。返回 response 或 None。"""
+    global _LAST_THS_REQUEST
+    elapsed = time.time() - _LAST_THS_REQUEST
+    if elapsed < _THS_MIN_INTERVAL:
+        time.sleep(_THS_MIN_INTERVAL - elapsed)
+    for i in range(retries):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            _LAST_THS_REQUEST = time.time()
+            resp.encoding = "gbk"
+            if resp.status_code == 200:
+                return resp
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(2 * (i + 1))  # 重试间隔递增
+    return None
 
 # ============================================================
 # 通用工具
 # ============================================================
 
 def _fmt_code(raw: str) -> str:
-    """统一6位代码格式"""
-    return str(raw).zfill(6)
+    """统一6位代码格式：去 sz/sh/bj 前缀 + 去 .SZ/.SH 后缀。"""
+    s = str(raw).strip().lower()
+    s = s.replace("sz", "").replace("sh", "").replace("bj", "")
+    s = s.split(".")[0]
+    return s.zfill(6)
 
 def _to_float(s) -> Optional[float]:
     """安全转浮点，支持亿/万单位"""
@@ -56,30 +93,37 @@ def _cached(func_name: str, *args, **kwargs):
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_index_kline(index_code: str, days: int = 120) -> pd.DataFrame:
-    """
-    获取指数日K线
-    index_code: '000001'（上证）, '399001'（深证）, '399006'（创业板）, '000688'（科创50）
-    返回 DataFrame：[date, open, high, low, close, volume, amount]
-    """
+    """获取指数日K线（Tushare index_daily 优先，稳定不封）。"""
     local = dm.load_local(f"index_{index_code}.csv")
-    if local is not None and not local.empty:
-        return local
+    if local is not None and not local.empty and "date" in local.columns:
+        latest = pd.to_datetime(local["date"]).max()
+        if (datetime.now() - latest).days <= 2:  # 缓存未过期（2天内）
+            return local
+    try:
+        src = _get_tushare()
+        ts_map = {"000001": "000001.SH", "399001": "399001.SZ", "399006": "399006.SZ", "000688": "000688.SH"}
+        ts_code = ts_map.get(index_code)
+        if ts_code:
+            end = datetime.now().strftime("%Y%m%d")
+            start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+            df = src.pro.index_daily(ts_code=ts_code, start_date=start, end_date=end)
+            if df is not None and not df.empty:
+                df = df.rename(columns={"trade_date": "date", "vol": "volume"})
+                df["date"] = pd.to_datetime(df["date"])
+                if "amount" in df.columns:
+                    df["amount"] = df["amount"] / 1e5  # 千元 → 亿元
+                df = df.sort_values("date").tail(days).reset_index(drop=True)
+                return df
+    except Exception:  # noqa: BLE001
+        pass
+    # 兜底：新浪
     try:
         prefix = "sh" if index_code.startswith("000") or index_code.startswith("60") else "sz"
         df = ak.stock_zh_index_daily(symbol=f"{prefix}{index_code}")
-        if df is None or df.empty:
-            return pd.DataFrame()
         df["date"] = pd.to_datetime(df["date"])
-        df = df.sort_values("date").tail(days).reset_index(drop=True)
-        return df
-    except Exception:
-        try:
-            df = ak.stock_zh_index_daily_em(symbol=f"sh{index_code}" if index_code.startswith("000") else f"sz{index_code}")
-            df["date"] = pd.to_datetime(df["date"])
-            df = df.sort_values("date").tail(days).reset_index(drop=True)
-            return df
-        except Exception:
-            return pd.DataFrame()
+        return df.sort_values("date").tail(days).reset_index(drop=True)
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
@@ -246,11 +290,9 @@ def get_concept_spot() -> pd.DataFrame:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Referer": "https://q.10jqka.com.cn/",
             }
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            response.encoding = "gbk"
-            
-            if response.status_code == 200:
+
+            response = _ths_request(url, headers=headers)
+            if response is not None:
                 html = response.text
                 pattern = r'<input type="hidden" id="gnSection" value=\'([^\']+)\'>'
                 match = re.search(pattern, html)
@@ -309,11 +351,9 @@ def get_sector_fund_flow_rank() -> pd.DataFrame:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://q.10jqka.com.cn/",
         }
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        response.encoding = "gbk"
-        
-        if response.status_code == 200:
+
+        response = _ths_request(url, headers=headers)
+        if response is not None:
             html = response.text
             pattern = r'<input type="hidden" id="gnSection" value=\'([^\']+)\'>'
             match = re.search(pattern, html)
@@ -390,8 +430,10 @@ def get_stock_kline(code: str, days: int = 120) -> pd.DataFrame:
     """获取个股日K线"""
     code = _fmt_code(code)
     local = dm.load_local(f"stock_{code}.csv")
-    if local is not None and not local.empty:
-        return local
+    if local is not None and not local.empty and "date" in local.columns:
+        latest = pd.to_datetime(local["date"]).max()
+        if (datetime.now() - latest).days <= 2:  # 缓存未过期才用
+            return local
     try:
         prefix = "sh" if code.startswith("6") else "sz"
         df = ak.stock_zh_a_daily(symbol=f"{prefix}{code}", adjust="qfq")
@@ -407,7 +449,21 @@ def get_stock_kline(code: str, days: int = 120) -> pd.DataFrame:
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").tail(days).reset_index(drop=True)
         return df
-    except Exception as e:
+    except Exception:
+        # 兜底：Tushare daily（稳定）
+        try:
+            src = _get_tushare()
+            ts_code = code + (".SH" if code.startswith("6") else ".SZ")
+            end = datetime.now().strftime("%Y%m%d")
+            start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+            df = src.pro.daily(ts_code=ts_code, start_date=start, end_date=end)
+            if df is not None and not df.empty:
+                df = df.rename(columns={"trade_date": "date", "vol": "volume", "pct_chg": "change_pct"})
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.sort_values("date").tail(days).reset_index(drop=True)
+                return df
+        except Exception:  # noqa: BLE001
+            pass
         return pd.DataFrame()
 
 
@@ -491,21 +547,100 @@ def get_stock_realtime(code: str) -> dict:
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_market_fund_flow() -> pd.DataFrame:
-    """获取全市场资金流向（主力/超大单/大单/中单/小单）"""
+    """获取全市场资金流向（东财优先，Tushare 兜底；本地缓存当天结果，重启不重跑）。"""
+    # 本地缓存（当天）
+    local = dm.load_local("market_fund_flow.csv")
+    if local is not None and not local.empty:
+        return local
     try:
         df = ak.stock_market_fund_flow()
-        return df
-    except Exception:
+        if df is not None and not df.empty:
+            dm.save_local(df, "market_fund_flow.csv")
+            return df
+    except Exception:  # noqa: BLE001
+        pass
+    # 兜底：Tushare moneyflow 聚合最近 10 个交易日
+    try:
+        src = _get_tushare()
+        cal = src.pro.trade_cal(exchange="SSE", is_open="1", end_date=datetime.now().strftime("%Y%m%d"))
+        tds = sorted(cal["cal_date"].tolist())[-10:] if cal is not None and not cal.empty else []
+        rows = []
+        for td in tds:
+            mf = src.pro.moneyflow(trade_date=td)
+            if mf is None or mf.empty:
+                continue
+            main_net = (mf["buy_lg_amount"] + mf["buy_elg_amount"] - mf["sell_lg_amount"] - mf["sell_elg_amount"]).sum()
+            elg_net = (mf["buy_elg_amount"] - mf["sell_elg_amount"]).sum()
+            lg_net = (mf["buy_lg_amount"] - mf["sell_lg_amount"]).sum()
+            md_net = (mf["buy_md_amount"] - mf["sell_md_amount"]).sum()
+            sm_net = (mf["buy_sm_amount"] - mf["sell_sm_amount"]).sum()
+            rows.append({
+                "日期": td, "主力净流入-净额": main_net, "超大单净流入-净额": elg_net,
+                "大单净流入-净额": lg_net, "中单净流入-净额": md_net, "小单净流入-净额": sm_net,
+            })
+        if rows:
+            result = pd.DataFrame(rows)
+            dm.save_local(result, "market_fund_flow.csv")
+            return result
+    except Exception:  # noqa: BLE001
+        pass
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=cfg.CACHE_TTL)
+def get_northbound(days: int = 10) -> pd.DataFrame:
+    """北向资金（沪深港通，Tushare moneyflow_hsgt）。"""
+    try:
+        src = _get_tushare()
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+        df = src.get_northbound(start, end)
+        return df if df is not None else pd.DataFrame()
+    except Exception:  # noqa: BLE001
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_stock_financial(code: str) -> dict:
-    """获取个股财务摘要"""
+    """获取个股财务摘要（Tushare fina_indicator，稳定）。"""
     code = _fmt_code(code)
     local = dm.load_local(f"stock_{code}_fin.json")
     if local:
         return local
+    try:
+        src = _get_tushare()
+        ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
+        fi = src.pro.fina_indicator(ts_code=ts_code)
+        if fi is not None and not fi.empty:
+            fi = fi.sort_values("end_date")
+            latest = fi.iloc[-1]
+            result = {
+                "report_date": str(latest.get("end_date", "")),
+                "revenue": None,
+                "revenue_yoy": _to_float(latest.get("tr_yoy", 0)),
+                "net_profit": None,
+                "net_profit_yoy": _to_float(latest.get("netprofit_yoy", 0)),
+                "gross_margin": _to_float(latest.get("grossprofit_margin", 0)),
+                "net_margin": _to_float(latest.get("netprofit_margin", 0)),
+                "roe": _to_float(latest.get("roe", 0)),
+                "debt_ratio": _to_float(latest.get("debt_to_assets", 0)),
+                "eps": _to_float(latest.get("eps", 0)),
+                "bps": _to_float(latest.get("bps", 0)),
+            }
+            # 营业收入 / 净利润从 income 接口补
+            try:
+                inc = src.pro.income(ts_code=ts_code, fields="end_date,revenue,n_income_attr_p")
+                if inc is not None and not inc.empty:
+                    inc = inc.sort_values("end_date")
+                    result["revenue"] = _to_float(inc.iloc[-1].get("revenue", 0))
+                    result["net_profit"] = _to_float(inc.iloc[-1].get("n_income_attr_p", 0))
+            except Exception:
+                pass
+            dm.save_local(result, f"stock_{code}_fin.json")
+            return result
+    except Exception:
+        pass
+    # 兜底 akshare 同花顺
     try:
         df = ak.stock_financial_abstract_ths(symbol=code, indicator="按报告期")
         if df is not None and not df.empty:
@@ -526,6 +661,32 @@ def get_stock_financial(code: str) -> dict:
     except Exception:
         pass
     return {}
+
+
+@st.cache_data(ttl=cfg.CACHE_TTL)
+def get_stock_fund_factors(code: str, days: int = 20) -> pd.DataFrame:
+    """个股资金面因子历史（主力净流入 + 换手率 + 量比），供预测模型用。"""
+    code = _fmt_code(code)
+    ts_code = code + (".SH" if code.startswith("6") else ".SZ")
+    try:
+        src = _get_tushare()
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+        mf = src.pro.moneyflow(ts_code=ts_code, start_date=start, end_date=end)
+        db = src.pro.daily_basic(
+            ts_code=ts_code, start_date=start, end_date=end,
+            fields="ts_code,trade_date,turnover_rate,volume_ratio",
+        )
+        if mf is None or mf.empty:
+            return pd.DataFrame()
+        # 主力净流入 = (大单买+特大单买) - (大单卖+特大单卖)
+        mf["main_net"] = (mf.get("buy_lg_amount", 0) + mf.get("buy_elg_amount", 0)) - \
+                         (mf.get("sell_lg_amount", 0) + mf.get("sell_elg_amount", 0))
+        if db is not None and not db.empty:
+            mf = mf.merge(db, on="trade_date", how="left")
+        return mf
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
@@ -573,42 +734,50 @@ def get_stock_fund_flow(code: str) -> dict:
 # 5. 龙虎榜 & 游资
 # ============================================================
 
+def _ts_inst_to_lhb(inst_df: pd.DataFrame) -> pd.DataFrame:
+    """Tushare top_inst → 东财龙虎榜字段格式（下游兼容）。"""
+    if inst_df is None or inst_df.empty:
+        return pd.DataFrame()
+    df = inst_df.rename(columns={
+        "exalter": "交易营业部名称",
+        "ts_code": "股票代码",
+        "buy": "买入金额",
+        "sell": "卖出金额",
+        "net_buy": "净额",
+    })
+    df["股票代码"] = df["股票代码"].astype(str).str.split(".").str[0].str.zfill(6)
+    try:
+        names = _get_tushare().pro.stock_basic(exchange="", list_status="L", fields="ts_code,name")
+        name_map = dict(zip(names["ts_code"], names["name"]))
+        df["股票名称"] = inst_df["ts_code"].map(name_map)
+    except Exception:  # noqa: BLE001
+        df["股票名称"] = ""
+    return df
+
+
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_lhb_recent(days: int = 10) -> pd.DataFrame:
-    """获取近N天龙虎榜数据"""
-    # 按天数分别缓存
-    local = dm.load_local(f"lhb_{days}.csv")
-    if local is not None and not local.empty:
-        return local
+    """获取近N天龙虎榜席位明细（Tushare top_inst，稳定不封）。"""
+    # 直接查 Tushare（@st.cache_data 已做 1 小时缓存，不再读本地旧缓存避免过期）
     try:
+        src = _get_tushare()
         dfs = []
         for i in range(days):
             date = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
             try:
-                summary = ak.stock_lhb_detail_em(start_date=date, end_date=date)
-                if summary is not None and not summary.empty:
-                    for _, row in summary.iterrows():
-                        try:
-                            stock_code = str(row["代码"]).zfill(6)
-                            detail = ak.stock_lhb_stock_detail_em(date=date, symbol=stock_code)
-                            if detail is not None and not detail.empty:
-                                detail["trade_date"] = date
-                                detail["股票代码"] = stock_code
-                                detail["股票名称"] = row.get("名称", "")
-                                dfs.append(detail)
-                        except Exception:
-                            continue
-                        time.sleep(0.05)
-            except Exception:
+                inst = src.get_lhb_inst(date)  # top_inst 席位明细
+                if inst is not None and not inst.empty:
+                    dfs.append(inst)
+            except Exception:  # noqa: BLE001
                 continue
             time.sleep(0.1)
         if not dfs:
             return pd.DataFrame()
         df = pd.concat(dfs, ignore_index=True)
-        # 保存到按天数的缓存文件
+        df = _ts_inst_to_lhb(df)  # 字段映射成下游兼容格式
         dm.save_local(df, f"lhb_{days}.csv")
         return df
-    except Exception:
+    except Exception:  # noqa: BLE001
         return pd.DataFrame()
 
 
@@ -700,6 +869,31 @@ def get_market_sentiment() -> dict:
     local = dm.load_local("sentiment.json")
     if local:
         return local
+    # 优先 Tushare：全市场涨跌家数（稳定不封）
+    try:
+        src = _get_tushare()
+        cal = src.pro.trade_cal(exchange="SSE", is_open="1", end_date=datetime.now().strftime("%Y%m%d"))
+        td = sorted(cal["cal_date"].tolist())[-1] if cal is not None and not cal.empty else datetime.now().strftime("%Y%m%d")
+        daily = src.pro.daily(trade_date=td, fields="ts_code,pct_chg,amount")
+        if daily is not None and not daily.empty:
+            up_count = int((daily["pct_chg"] > 0).sum())
+            down_count = int((daily["pct_chg"] < 0).sum())
+            flat_count = len(daily) - up_count - down_count
+            total_amount = float(daily["amount"].sum()) / 1e5  # 千元 → 亿元
+            zt_count = int(((daily["pct_chg"] >= 9.5)).sum())  # 涨停近似（10%/20% 涨停）
+            return {
+                "up_count": up_count,
+                "down_count": down_count,
+                "flat_count": flat_count,
+                "up_ratio": up_count / len(daily) * 100 if len(daily) else 0,
+                "zt_count": zt_count,
+                "zha_rate": None,  # Tushare 拿不到炸板数据，None 表示无数据
+                "total_amount": round(total_amount, 1),
+                "sentiment": _classify_sentiment(up_count, down_count),
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    # 兜底：东财
     try:
         spot_df = ak.stock_zh_a_spot_em()
         up_count = len(spot_df[spot_df["涨跌幅"].apply(lambda x: _to_float(x) or 0) > 0])
@@ -727,26 +921,7 @@ def get_market_sentiment() -> dict:
             "total_amount": total_amount,
             "sentiment": _classify_sentiment(up_count, down_count),
         }
-    except Exception:
-        try:
-            kline = get_stock_kline(code, days=2)
-            if not kline.empty and len(kline) >= 1:
-                latest = kline.iloc[-1]
-                return {
-                    "code": code,
-                    "name": "",
-                    "price": latest["close"],
-                    "change_pct": 0,
-                    "change_amt": 0,
-                    "volume": latest.get("volume", 0),
-                    "amount": latest.get("amount", 0),
-                    "turnover": 0,
-                    "high": latest["high"],
-                    "low": latest["low"],
-                    "open": latest["open"],
-                }
-        except Exception:
-            pass
+    except Exception:  # noqa: BLE001
         return {}
 
 
@@ -774,8 +949,26 @@ def _classify_sentiment(up: int, down: int) -> str:
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_stock_zygc(code: str) -> pd.DataFrame:
-    """获取主营业务构成"""
+    """获取主营业务构成（Tushare fina_mainbz，稳定）。"""
     code = _fmt_code(code)
+    try:
+        src = _get_tushare()
+        ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
+        df = src.pro.fina_mainbz(ts_code=ts_code, type="P")
+        if df is not None and not df.empty:
+            # 只取最近一个报告期，去重，剔除空收入
+            latest = df["end_date"].max()
+            df = df[df["end_date"] == latest].drop_duplicates("bz_item", keep="last")
+            df = df[df["bz_sales"].notna()]
+            df = df.rename(columns={
+                "end_date": "报告期", "bz_item": "主营项目", "bz_sales": "主营收入(元)",
+                "bz_profit": "主营利润(元)", "bz_cost": "主营成本(元)",
+            })
+            cols = [c for c in ["报告期", "主营项目", "主营收入(元)", "主营利润(元)", "主营成本(元)"] if c in df.columns]
+            return df[cols].sort_values("主营收入(元)", ascending=False).reset_index(drop=True)
+    except Exception:
+        pass
+    # 兜底 akshare
     try:
         if code.startswith(("60", "68", "11", "12", "5")):
             market = "sh"
@@ -786,15 +979,28 @@ def get_stock_zygc(code: str) -> pd.DataFrame:
         df = ak.stock_zygc_em(symbol=f"{market.upper()}{code}")
         if df is not None and not df.empty:
             return df
-    except Exception as e:
-        print(f"主营业务构成获取失败: {e}")
+    except Exception:
+        pass
     return pd.DataFrame()
 
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_stock_top10(code: str) -> pd.DataFrame:
-    """获取十大股东"""
+    """获取十大股东（Tushare top10_holders，稳定）。"""
     code = _fmt_code(code)
+    try:
+        src = _get_tushare()
+        ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
+        df = src.pro.top10_holders(ts_code=ts_code)
+        if df is not None and not df.empty:
+            df = df.sort_values("end_date").drop_duplicates("holder_name", keep="last")
+            df = df.rename(columns={"end_date": "报告期", "holder_name": "股东名称",
+                                    "hold_amount": "持股数(股)", "hold_ratio": "持股比例(%)"})
+            cols = [c for c in ["报告期", "股东名称", "持股数(股)", "持股比例(%)"] if c in df.columns]
+            return df[cols].head(10).reset_index(drop=True)
+    except Exception:
+        pass
+    # 兜底 akshare
     try:
         prefix = "sh" if code.startswith("6") else "sz"
         df = ak.stock_gdfx_top_10_em(symbol=f"{prefix}{code}")
@@ -807,8 +1013,21 @@ def get_stock_top10(code: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_stock_top10_free(code: str) -> pd.DataFrame:
-    """获取十大流通股东"""
+    """获取十大流通股东（Tushare top10_floatholders，稳定）。"""
     code = _fmt_code(code)
+    try:
+        src = _get_tushare()
+        ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
+        df = src.pro.top10_floatholders(ts_code=ts_code)
+        if df is not None and not df.empty:
+            df = df.sort_values("end_date").drop_duplicates("holder_name", keep="last")
+            df = df.rename(columns={"end_date": "报告期", "holder_name": "股东名称",
+                                    "hold_amount": "持股数(股)", "hold_ratio": "持股比例(%)"})
+            cols = [c for c in ["报告期", "股东名称", "持股数(股)", "持股比例(%)"] if c in df.columns]
+            return df[cols].head(10).reset_index(drop=True)
+    except Exception:
+        pass
+    # 兜底 akshare
     try:
         prefix = "sh" if code.startswith("6") else "sz"
         df = ak.stock_gdfx_free_top_10_em(symbol=f"{prefix}{code}")
@@ -821,14 +1040,27 @@ def get_stock_top10_free(code: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_stock_research(code: str) -> pd.DataFrame:
-    """获取机构研报"""
+    """获取机构研报（Tushare report_rc，稳定）。"""
     code = _fmt_code(code)
+    try:
+        src = _get_tushare()
+        ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
+        df = src.pro.report_rc(ts_code=ts_code)
+        if df is not None and not df.empty:
+            # 按研报标题去重（同一标题会被多家转载/重复收录）
+            df = df.drop_duplicates("report_title", keep="first").sort_values("report_date", ascending=False)
+            df = df.rename(columns={"report_date": "报告日期", "report_title": "研报标题", "report_org": "机构名称"})
+            cols = [c for c in ["报告日期", "研报标题", "机构名称"] if c in df.columns]
+            return df[cols].head(10).reset_index(drop=True)
+    except Exception:
+        pass
+    # 兜底 akshare
     try:
         df = ak.stock_research_report_em(symbol=code)
         if df is not None and not df.empty:
             return df
-    except Exception as e:
-        print(f"机构研报获取失败: {e}")
+    except Exception:
+        pass
     return pd.DataFrame()
 
 
@@ -855,38 +1087,318 @@ def get_stock_news(code: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_stock_dividend(code: str) -> pd.DataFrame:
-    """获取历史分红"""
+    """获取历史分红（Tushare dividend，稳定）。"""
     code = _fmt_code(code)
+    try:
+        src = _get_tushare()
+        ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
+        df = src.pro.dividend(ts_code=ts_code)
+        if df is not None and not df.empty:
+            # 同一报告期有多条（预案/实施等），保留「实施阶段」（有派息日的），去重
+            df["_has_pay"] = df["pay_date"].notna().astype(int)
+            df = df.sort_values("_has_pay", ascending=False).drop_duplicates("end_date", keep="first")
+            df = df.drop(columns=["_has_pay"]).sort_values("end_date", ascending=False)
+            df = df.rename(columns={
+                "end_date": "报告期", "ann_date": "公告日", "cash_div": "每股派息(元)",
+                "stk_div": "每股送股", "stk_bo_rate": "送股比例", "stk_co_rate": "转增比例",
+                "record_date": "登记日", "ex_date": "除权除息日", "pay_date": "派息日",
+            })
+            cols = [c for c in ["报告期", "公告日", "每股派息(元)", "每股送股", "转增比例", "登记日", "除权除息日", "派息日"] if c in df.columns]
+            return df[cols].head(20).reset_index(drop=True)
+    except Exception:
+        pass
+    # 兜底 akshare
     try:
         df = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
         if df is not None and not df.empty:
             return df
-    except Exception as e:
-        print(f"分红数据获取失败: {e}")
+    except Exception:
+        pass
     return pd.DataFrame()
 
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_stock_share_alloc(code: str) -> pd.DataFrame:
-    """获取历史送转"""
+    """获取历史送转（Tushare dividend 的送转字段，稳定）。"""
     code = _fmt_code(code)
+    try:
+        src = _get_tushare()
+        ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
+        df = src.pro.dividend(ts_code=ts_code)
+        if df is not None and not df.empty:
+            df = df[df.get("stk_div", 0).fillna(0) > 0]  # 只留有送转的
+            df = df.rename(columns={
+                "end_date": "报告期", "stk_div": "每股送股", "stk_bo_rate": "送股比例",
+                "stk_co_rate": "转增比例", "ex_date": "除权除息日",
+            })
+            cols = [c for c in ["报告期", "每股送股", "送股比例", "转增比例", "除权除息日"] if c in df.columns]
+            return df[cols].head(20).reset_index(drop=True)
+    except Exception:
+        pass
+    # 兜底 akshare
     try:
         df = ak.stock_history_dividend_detail(symbol=code, indicator="配股")
         if df is not None and not df.empty:
             return df
-    except Exception as e:
-        print(f"送转数据获取失败: {e}")
+    except Exception:
+        pass
     return pd.DataFrame()
 
 
 @st.cache_data(ttl=cfg.CACHE_TTL)
 def get_stock_release(code: str) -> pd.DataFrame:
-    """获取限售解禁"""
+    """获取限售解禁（Tushare share_float，稳定）。"""
     code = _fmt_code(code)
+    try:
+        src = _get_tushare()
+        ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
+        df = src.pro.share_float(ts_code=ts_code)
+        if df is not None and not df.empty:
+            df = df.rename(columns={
+                "float_date": "解禁日期", "float_share": "解禁数量(股)",
+                "float_ratio": "解禁占比(%)", "holder_name": "股东名称",
+            })
+            cols = [c for c in ["解禁日期", "解禁数量(股)", "解禁占比(%)", "股东名称"] if c in df.columns]
+            return df[cols].head(20).reset_index(drop=True)
+    except Exception:
+        pass
+    # 兜底 akshare
     try:
         df = ak.stock_restricted_release_queue_em(symbol=code)
         if df is not None and not df.empty:
             return df
-    except Exception as e:
-        print(f"限售解禁获取失败: {e}")
+    except Exception:
+        pass
     return pd.DataFrame()
+
+
+@st.cache_data(ttl=cfg.CACHE_TTL)
+def get_lhb_trader_detail(days: int = 5) -> pd.DataFrame:
+    """获取龙虎榜个股-营业部明细，含游资名映射"""
+    end = datetime.now()
+    start = end - timedelta(days=days)
+    date_str = end.strftime("%Y%m%d")
+    start_str = start.strftime("%Y%m%d")
+    
+    # 1. 获取近日全部龙虎榜股票
+    try:
+        all_lhb = ak.stock_lhb_detail_em(start_date=start_str, end_date=date_str)
+        if all_lhb.empty: return pd.DataFrame()
+    except:
+        return pd.DataFrame()
+    
+    all_rows = []
+    url = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
+    h = {'User-Agent': 'Mozilla/5.0'}
+    
+    # 2. 遍历每只股票获取营业部明细
+    for _, row in all_lhb.iterrows():
+        code = str(row.get('代码', ''))
+        date_val = str(row.get('日期', ''))[:10].replace('-', '-')
+        if not code or not date_val: continue
+        
+        for flag, rpt, sc in [('买入', 'RPT_BILLBOARD_DAILYDETAILSBUY', 'BUY'),
+                               ('卖出', 'RPT_BILLBOARD_DAILYDETAILSSELL', 'SELL')]:
+            try:
+                flt = f"(TRADE_DATE='{date_val}')(SECURITY_CODE=\"{code}\")"
+                params = {'reportName': rpt, 'columns': 'ALL', 'filter': flt,
+                          'pageNumber': '1', 'pageSize': '20', 'sortTypes': '-1',
+                          'sortColumns': sc, 'source': 'WEB', 'client': 'WEB'}
+                r = requests.get(url, params=params, headers=h, timeout=10)
+                d = r.json()
+                if d.get('success') and d['result'].get('data'):
+                    for item in d['result']['data']:
+                        dept_name = item.get('OPERATEDEPT_NAME', '')
+                        buy_amt = item.get('BUY') or 0
+                        sell_amt = item.get('SELL') or 0
+                        amount = buy_amt if flag == '买入' else sell_amt
+                        all_rows.append({
+                            '日期': date_val, '股票代码': code,
+                            '股票名称': row.get('名称', ''),
+                            '营业部': dept_name,
+                            '方向': flag,
+                            '金额(万)': round(amount / 10000, 2) if amount else 0,
+                            '营业部代码': item.get('OPERATEDEPT_CODE', ''),
+                        })
+            except:
+                pass
+    
+    if not all_rows: return pd.DataFrame()
+    df = pd.DataFrame(all_rows)
+    
+    # 3. 匹配游资名
+    seat_map = cfg.HOT_MONEY_SEATS
+    def match_trader(dept):
+        if not dept: return ''
+        for trader, keywords in seat_map.items():
+            for kw in keywords:
+                if kw in str(dept):
+                    return trader
+        return ''
+    df['游资'] = df['营业部'].apply(match_trader)
+    
+    # 4. 过滤只保留有游资名或金额>500万的行
+    df = df[(df['游资'] != '') | (df['金额(万)'] > 500)]
+    return df.sort_values(['日期', '金额(万)'], ascending=[False, False]).reset_index(drop=True)
+
+# ============================================================
+# 8. 板块龙头股（每个行业市值前 N，供每日龙头分析）
+# ============================================================
+
+@st.cache_data(ttl=cfg.CACHE_TTL)
+def get_industry_leaders(top_n: int = 2) -> pd.DataFrame:
+    """每个行业市值前 top_n 的龙头股（Tushare stock_basic + daily_basic）。
+
+    返回列：trade_date, industry, ts_code, name, total_mv(万), circ_mv(万),
+            turnover_rate, pe, pb, pct_chg
+    """
+    try:
+        src = _get_tushare()
+        # 最近交易日
+        cal = src.pro.trade_cal(exchange="SSE", is_open="1", end_date=datetime.now().strftime("%Y%m%d"))
+        td = sorted(cal["cal_date"].tolist())[-1] if cal is not None and not cal.empty else datetime.now().strftime("%Y%m%d")
+        sb = src.pro.stock_basic(exchange="", list_status="L", fields="ts_code,name,industry")
+        db = src.pro.daily_basic(trade_date=td, fields="ts_code,total_mv,circ_mv,turnover_rate,pe,pb")
+        daily = src.pro.daily(trade_date=td, fields="ts_code,pct_chg")
+        if sb is None or db is None or db.empty:
+            return pd.DataFrame()
+        m = sb.merge(db, on="ts_code", how="inner")
+        if daily is not None and not daily.empty:
+            m = m.merge(daily[["ts_code", "pct_chg"]], on="ts_code", how="left")
+        else:
+            m["pct_chg"] = 0
+        # 剔除行业为空
+        m = m[m["industry"].notna() & (m["industry"] != "")]
+        # 每个行业取市值前 top_n
+        leaders = (m.sort_values("total_mv", ascending=False)
+                    .groupby("industry", group_keys=False).head(top_n)
+                    .reset_index(drop=True))
+        leaders["trade_date"] = td
+        return leaders
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=cfg.CACHE_TTL)
+def get_stock_valuation(code: str) -> dict:
+    """个股估值数据（总市值/流通市值/PE/PB/换手率，Tushare daily_basic）。"""
+    code = _fmt_code(code)
+    try:
+        src = _get_tushare()
+        ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
+        cal = src.pro.trade_cal(exchange="SSE", is_open="1", end_date=datetime.now().strftime("%Y%m%d"))
+        td = sorted(cal["cal_date"].tolist())[-1] if cal is not None and not cal.empty else datetime.now().strftime("%Y%m%d")
+        db = src.pro.daily_basic(ts_code=ts_code, trade_date=td, fields="total_mv,circ_mv,pe,pb,turnover_rate")
+        if db is not None and not db.empty:
+            r = db.iloc[-1]
+            return {
+                "total_mv": _to_float(r.get("total_mv", 0)) * 10000,   # 万元 → 元
+                "circ_mv": _to_float(r.get("circ_mv", 0)) * 10000,
+                "pe": _to_float(r.get("pe", 0)),
+                "pb": _to_float(r.get("pb", 0)),
+                "turnover_rate": _to_float(r.get("turnover_rate", 0)),
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+@st.cache_data(ttl=cfg.CACHE_TTL)
+def get_industry_pct() -> dict:
+    """申万行业涨跌（Tushare daily + stock_basic 自己算，与龙头 industry 同一套分类）。"""
+    try:
+        src = _get_tushare()
+        cal = src.pro.trade_cal(exchange="SSE", is_open="1", end_date=datetime.now().strftime("%Y%m%d"))
+        td = sorted(cal["cal_date"].tolist())[-1] if cal is not None and not cal.empty else datetime.now().strftime("%Y%m%d")
+        d = src.pro.daily(trade_date=td, fields="ts_code,pct_chg")
+        sb = src.pro.stock_basic(list_status="L", fields="ts_code,industry")
+        if d is not None and not d.empty and sb is not None and not sb.empty:
+            m = d.merge(sb, on="ts_code", how="left")
+            m = m[m["industry"].notna()]
+            return m.groupby("industry")["pct_chg"].mean().round(2).to_dict()
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _to_ts_code(code: str) -> str:
+    """6位代码 → Tushare 代码（6开头.SH，其余.SZ/.BJ）。"""
+    c = str(code).zfill(6)
+    if c.startswith("6"):
+        return c + ".SH"
+    if c.startswith(("4", "8")):
+        return c + ".BJ"
+    return c + ".SZ"
+
+
+def _get_period_return(code: str, start_date: str, end_date: str):
+    """持仓期间涨幅 = 最近收盘 / 首次收盘 - 1（百分比）。"""
+    try:
+        pro = _get_tushare().pro
+        daily = pro.daily(ts_code=_to_ts_code(code), start_date=str(start_date), end_date=str(end_date))
+        if daily is None or daily.empty:
+            return None
+        daily = daily.sort_values("trade_date")
+        return round((float(daily["close"].iloc[-1]) / float(daily["close"].iloc[0]) - 1) * 100, 2)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def get_hot_money_positions(hot_df: pd.DataFrame) -> pd.DataFrame:
+    """游资持仓汇总：按 游资×股票 聚合，推算持仓/清仓状态。
+
+    龙虎榜只披露买卖前5营业部，小额交易抓不到，所以：
+    - 卖出 >= 买入 → 已清仓（确定）
+    - 买入 - 卖出 < 买入的 5% → 疑似清仓（剩余很少忽略）
+    - 其余 → 持仓中
+    """
+    if hot_df is None or hot_df.empty:
+        return pd.DataFrame()
+    g = hot_df.groupby(["hot_money_name", "股票代码", "股票名称"]).agg(
+        累计买入=("买入金额", "sum"),
+        累计卖出=("卖出金额", "sum"),
+        首次买入=("trade_date", "min"),
+        最近操作=("trade_date", "max"),
+    ).reset_index()
+
+    def _status(r):
+        buy, sell = float(r["累计买入"]), float(r["累计卖出"])
+        if sell >= buy:
+            return "已清仓"
+        if buy - sell < buy * 0.05:
+            return "疑似清仓"
+        return "持仓中"
+
+    g["状态"] = g.apply(_status, axis=1)
+
+    # 持仓天数（首次买入 → 最近操作，自然日）
+    g["持仓天数"] = g.apply(
+        lambda r: (datetime.strptime(str(r["最近操作"]), "%Y%m%d") - datetime.strptime(str(r["首次买入"]), "%Y%m%d")).days,
+        axis=1,
+    )
+    # 持仓期间涨幅（首次买入收盘 → 最近操作收盘）
+    g["期间涨幅%"] = g.apply(
+        lambda r: _get_period_return(r["股票代码"], str(r["首次买入"]), str(r["最近操作"])),
+        axis=1,
+    )
+    # 金额转万元（原始是元）
+    g["净持仓(万)"] = ((g["累计买入"] - g["累计卖出"]) / 1e4).round(2)
+    g["累计买入(万)"] = (g["累计买入"] / 1e4).round(2)
+    g["累计卖出(万)"] = (g["累计卖出"] / 1e4).round(2)
+    g = g.drop(columns=["累计买入", "累计卖出"])
+    g = g.sort_values("净持仓(万)", ascending=False).reset_index(drop=True)
+    return g
+
+
+def merge_hot_money_daily(hot_df: pd.DataFrame) -> pd.DataFrame:
+    """游资交易明细：同一天同一只票合并成一条（买入、卖出各自加总）。"""
+    if hot_df is None or hot_df.empty:
+        return pd.DataFrame()
+    cols = ["trade_date", "hot_money_name", "股票名称", "股票代码"]
+    agg = {
+        "买入金额": "sum",
+        "卖出金额": "sum",
+    }
+    g = hot_df.groupby(cols, as_index=False).agg(agg)
+    g["净额"] = g["买入金额"] - g["卖出金额"]
+    return g.sort_values(["trade_date", "净额"], ascending=[False, False]).reset_index(drop=True)

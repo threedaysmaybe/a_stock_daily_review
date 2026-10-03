@@ -13,6 +13,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import sys
+import subprocess
 import json
 import base64
 import time
@@ -26,6 +28,7 @@ import data_fetcher as df_
 import analyzer as anl
 import visualizer as viz
 import data_manager as dm
+from utils.ui import inject_css, conclusion, pct_color
 
 # ============================================================
 # Streamlit 页面配置
@@ -60,18 +63,9 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# 加载持仓（本地优先）
-# ============================================================
+# 加载持仓（统一走 data_manager，代码规范化，全页面一致）
 def load_portfolio() -> dict:
-    _PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "portfolio.json")
-    _portfolio = dict(cfg.PORTFOLIO)
-    if os.path.exists(_PORTFOLIO_FILE):
-        try:
-            with open(_PORTFOLIO_FILE, "r", encoding="utf-8") as _f:
-                _portfolio = json.load(_f)
-        except Exception:
-            pass
-    return _portfolio
+    return dm.load_portfolio()
 
 
 # ============================================================
@@ -93,10 +87,9 @@ pages = {
     "📊 大盘走势": "01_📊_大盘走势",
     "🔥 板块分析": "02_🔥_板块分析",
     "💹 资金情绪": "03_💹_资金情绪",
-    "🐉 龙头股": "04_🐉_龙头股",
+    "🏆 板块龙头": "10_🏆_板块龙头",
     "💼 持仓分析": "05_💼_持仓分析",
-    "🕵️ 游资追踪": "06_🕵️_游资追踪",
-    "🔮 明日预测": "07_🔮_明日预测",
+    "🎯 选股决策": "07_🎯_选股决策",
 }
 
 st.sidebar.markdown("使用左侧导航栏切换页面 ⬅️")
@@ -140,24 +133,27 @@ if st.sidebar.button("🔄 更新数据 & 重新分析", use_container_width=Tru
     df_.get_sector_spot._cache = None
     df_.get_concept_spot._cache = None
     
-    # 回补历史缺失的板块数据（独立进度，不影响下载进度条）
-    missing_dates = meta.get("backfill_needed", [])
-    if missing_dates:
-        progress_bar.progress(0.95, text="🔍 回补历史板块排名...")
-        bf_total = len(missing_dates)
-        for bfi, bfd in enumerate(missing_dates):
-            progress_bar.progress(0.95 + 0.05 * (bfi + 1) / bf_total, 
-                                  text=f"🔍 回补 {bfd[0]} {bfd[1]}...")
-            dm.backfill_one(bfd[0], bfd[1])
-        progress_bar.progress(0.95, text="🔍 回补完成")
+    # 快速回补缺失的行业排名（单个API调用很快）
+    missing = meta.get("backfill_needed", [])
+    if missing:
+        for i, (date_str, kind) in enumerate(missing):
+            label = "行业" if kind == "sectors" else "概念"
+            progress_bar.progress(0.95 + 0.05 * (i + 1) / (len(missing) + 1),
+                                  text=f"📌 回补 {date_str} {label}排名...")
+            dm.backfill_one(date_str, kind)
     
-    progress_bar.progress(1.0, text="✅ 下载完成，正在刷新...")
+    # 个股深度数据（研报用）在「持仓分析」页按需采集，这里跳过，避免更新卡住
+    # （stock_data_collect.py 逐只跑 subprocess，很慢，且非每日复盘必需）
+
+    progress_bar.progress(1.0, text="✅ 全部完成，正在刷新...")
     time.sleep(0.3)
     progress_bar.empty()
     status_text.empty()
     if meta["ok"] > 0:
-        # 清除所有缓存
+        # 清除所有缓存 + 强制下次读盘
         st.cache_data.clear()
+        for k in ["_indices_data", "_sentiment", "_sector_df", "_concept_df", "_limit_up_df", "_realtime_cache", "holdings_pred", "holdings_pred_key"]:
+            st.session_state.pop(k, None)
         st.session_state._market_data_loaded = False
         st.session_state._update_summary = f"成功 {meta['ok']}，失败 {meta['fail']}"
         st.rerun()
@@ -223,8 +219,37 @@ if not st.session_state._market_data_loaded:
     st.session_state._limit_up_df = l if (l is not None and not (hasattr(l, 'empty') and l.empty)) else df_.get_limit_up_stocks()
     
     st.session_state._realtime_cache = {}
+    # 从本地K线读最新收盘价
+    for code, name in _portfolio.items():
+        try:
+            kf = dm.load_local(f"stock_{code}.csv")
+            if kf is not None and not kf.empty and "close" in kf.columns:
+                last = kf.iloc[-1]
+                prev = kf.iloc[-2] if len(kf) >= 2 else last
+                pct = (float(last["close"]) - float(prev["close"])) / float(prev["close"]) * 100 if len(kf) >= 2 else 0
+                st.session_state._realtime_cache[code] = {
+                    "price": float(last["close"]),
+                    "change_pct": round(pct, 2),
+                }
+        except Exception:
+            pass
     
     st.session_state._market_data_loaded = True
+
+    # ===== 数据健康自检（防呆：主动报告哪些数据没拿到，不静默显示 0）=====
+    _health = {}
+    _sent = st.session_state.get("_sentiment") or {}
+    _health["市场情绪"] = bool(_sent.get("up_count"))
+    _sdf = st.session_state.get("_sector_df")
+    _health["行业板块"] = _sdf is not None and len(_sdf) > 0
+    _cdf = st.session_state.get("_concept_df")
+    _health["概念板块"] = _cdf is not None and len(_cdf) > 0
+    _ldf = st.session_state.get("_limit_up_df")
+    _health["涨停池"] = _ldf is not None and len(_ldf) > 0
+    _idx = st.session_state.get("_indices_data") or {}
+    _health["指数行情"] = len(_idx) > 0
+    st.session_state._data_health = _health
+    st.session_state._data_health_warning = [k for k, v in _health.items() if not v]
 
 # 从 session_state 读取数据
 indices_data = st.session_state.get("_indices_data", {})
@@ -241,8 +266,35 @@ _trading_day_str = _trading_day.strftime("%Y-%m-%d") if hasattr(_trading_day, 's
 # 首页仪表盘
 # ============================================================
 
+inject_css()
 st.title("📈 每日A股复盘 · 仪表盘")
-st.caption(f"交易日 {_trading_day_str} | 数据来源：akshare")
+st.caption(f"交易日 {_trading_day_str} | 数据来源：Tushare + akshare")
+
+# 数据健康警告（防呆：主动报告哪些数据没拿到）
+if st.session_state.get("_data_health_warning"):
+    _miss = st.session_state["_data_health_warning"]
+    st.warning(f"⚠️ 以下数据暂不可用：{'、'.join(_miss)}（可能休市或数据源异常，相关指标会显示「无数据」而非 0）")
+
+# 核心结论卡片（突出主次）
+if isinstance(sentiment, dict) and sentiment.get("up_count"):
+    _up = sentiment.get("up_count", 0)
+    _down = sentiment.get("down_count", 0)
+    _ratio = sentiment.get("up_ratio", 0) or 0
+    _zt = sentiment.get("zt_count", 0) or (len(limit_up_df) if not limit_up_df.empty else 0)
+    _amt = sentiment.get("total_amount", 0) or 0
+    _sent = (sentiment.get("sentiment") or "").lstrip("🔥😊😐😟❄️💀").strip()
+    if _ratio > 65:
+        _tone, _verdict = "bull", "偏暖，短线可积极"
+    elif _ratio > 50:
+        _tone, _verdict = "neutral", "中性，精选个股"
+    elif _ratio > 35:
+        _tone, _verdict = "bear", "偏冷，控制仓位"
+    else:
+        _tone, _verdict = "bear", "冰点/恐慌，谨慎观望"
+    conclusion(f"市场情绪：{_sent or '—'} → {_verdict}",
+               f"上涨 <b>{_up}</b> 家 / 下跌 <b>{_down}</b> 家（上涨占比 {_ratio:.1f}%），"
+               f"涨停 <b>{_zt}</b> 家，两市成交 <b>{_amt:.0f}</b> 亿。",
+               tone=_tone)
 
 # 显示更新完成通知
 if st.session_state.get("_update_summary"):
@@ -274,6 +326,29 @@ cols_status = st.columns(6)
 if isinstance(sentiment, dict):
     up = sentiment.get("up_count", 0)
     down = sentiment.get("down_count", 0)
+    up_delta, down_delta = None, None
+    # 较前一交易日涨跌家数变化
+    try:
+        data_dir = "data"
+        dates = sorted([d for d in os.listdir(data_dir) 
+                       if os.path.isdir(os.path.join(data_dir, d)) and d.isdigit()], reverse=True)
+        today_sent = None
+        for dd in dates:
+            sp = os.path.join(data_dir, dd, "sentiment.json")
+            if os.path.exists(sp):
+                import json
+                with open(sp, "r", encoding="utf-8") as f:
+                    sdata = json.load(f)
+                if sdata.get("up_count"):  # 有效数据
+                    if today_sent is None:
+                        today_sent = sdata  # 第一个有效=今天
+                    else:
+                        # 前一个有效=昨天
+                        up_delta = up - sdata.get("up_count", 0)
+                        down_delta = down - sdata.get("down_count", 0)
+                        break
+    except Exception:
+        pass
     # 涨停/炸板从 limit_up 实时取
     zt_df = st.session_state.get("_limit_up_df", pd.DataFrame())
     zt_count = len(zt_df) if not zt_df.empty else sentiment.get("zt_count", 0)
@@ -298,8 +373,12 @@ if isinstance(sentiment, dict):
     except Exception:
         pass
 
-    cols_status[0].metric("上涨家数", f"{up}", delta=f"{sentiment.get('up_ratio', 0):.1f}%", delta_color="inverse")
-    cols_status[1].metric("下跌家数", f"{down}")
+    cols_status[0].metric("上涨家数", f"{up}",
+                          delta=f"{up_delta:+d}" if up_delta is not None else None,
+                          delta_color="inverse")
+    cols_status[1].metric("下跌家数", f"{down}",
+                          delta=f"{down_delta:+d}" if down_delta is not None else None,
+                          delta_color="inverse")
     cols_status[2].metric("涨停", f"{zt_count}")
     cols_status[3].metric("炸板率", f"{zha_rate:.1f}%")
     cols_status[4].metric("成交额(亿)", f"{total_amt:.0f}" if total_amt else "—",
@@ -315,7 +394,18 @@ if _portfolio:
     cols_hold = st.columns(len(_portfolio))
     for i, (code, name) in enumerate(_portfolio.items()):
         with cols_hold[i]:
-            rt = realtime_cache.get(code, {})
+            rt = realtime_cache.get(code)
+            if not rt:
+                # 兜底：从本地K线读
+                try:
+                    kf = dm.load_local(f"stock_{code}.csv")
+                    if kf is not None and not kf.empty and "close" in kf.columns:
+                        last = kf.iloc[-1]
+                        prev = kf.iloc[-2] if len(kf) >= 2 else last
+                        pct = (float(last["close"]) - float(prev["close"])) / float(prev["close"]) * 100 if len(kf) >= 2 else 0
+                        rt = {"price": float(last["close"]), "change_pct": round(pct, 2)}
+                except Exception:
+                    pass
             if rt:
                 price = rt.get("price", 0) or 0
                 pct = rt.get("change_pct", 0) or 0

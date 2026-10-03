@@ -1,13 +1,25 @@
 """工具函数"""
+import math
+
+
+def safe_num(v, default="—"):
+    """防呆：None/NaN/inf → default（默认"—"），否则返回 float 数值。"""
+    if v is None:
+        return default
+    try:
+        f = float(v)
+        if math.isnan(f) or math.isinf(f):
+            return default
+        return f
+    except (ValueError, TypeError):
+        return default
+
 
 def fmt_cn(num, decimals=2):
     """数字中文格式化：自动转万/亿"""
-    if num is None:
+    n = safe_num(num, None)
+    if n is None:
         return "—"
-    try:
-        n = float(num)
-    except (ValueError, TypeError):
-        return str(num)
 
     sign = "-" if n < 0 else ""
     n = abs(n)
@@ -26,12 +38,10 @@ def fmt_cn(num, decimals=2):
 
 def fmt_pct(num, decimals=2):
     """百分比格式化"""
-    if num is None:
+    n = safe_num(num, None)
+    if n is None:
         return "—"
-    try:
-        return f"{float(num):+.{decimals}f}%"
-    except (ValueError, TypeError):
-        return str(num)
+    return f"{n:+.{decimals}f}%"
 
 
 def fmt_time(ts=None):

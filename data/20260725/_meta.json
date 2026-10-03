@@ -1,0 +1,16 @@
+{
+  "date": "20260725",
+  "download_time": "2026-07-25 23:17:58",
+  "ok": 7,
+  "fail": 8,
+  "total": 15,
+  "files": [
+    "sectors.csv",
+    "concept_sectors.csv",
+    "sentiment.json",
+    "stock_600176.csv",
+    "stock_600176_fin.json",
+    "limit_up.csv",
+    "stock_list.csv"
+  ]
+}

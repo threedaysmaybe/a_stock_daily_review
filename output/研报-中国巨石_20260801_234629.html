@@ -1,0 +1,150 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>中国巨石·研报</title><style>
+:root{--bg:#0c0f15;--card-bg:#1a1c24;--card-bg-alt:#1e2029;--border:#2a2d3a;--text-primary:#e8e9ec;--text-secondary:#b0b3be;--text-muted:#7a7d8a;--red-up:#f55656;--green-down:#28c75b;--gold:#d4a853;--gold-light:#e3c26d;--orange-warn:#e8923a;--radius:10px;--font-sans:"PingFang SC","Microsoft YaHei",sans-serif;--font-mono:"JetBrains Mono","SF Mono","Consolas",monospace}
+body.light-mode{--bg:#fdf8f0;--card-bg:#fffbf5;--card-bg-alt:#fef5e7;--border:#e2cfa2;--text-primary:#2a1f12;--text-secondary:#6b5634;--text-muted:#9c8b6e;--red-up:#dc2626;--green-down:#16a34a;--gold:#b38a3c;--gold-light:#d4a853}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text-primary);font:14px/1.7 var(--font-sans);max-width:1200px;margin:0 auto;padding:20px}
+.top-nav{position:sticky;top:0;z-index:99;background:rgba(10,12,18,.92);backdrop-filter:blur(12px);border-bottom:2px solid var(--gold-light);padding:10px 28px;margin:-20px -20px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.top-nav .logo{display:flex;align-items:center;gap:10px;color:#fff}
+.top-nav .logo-icon{width:34px;height:34px;background:linear-gradient(135deg,#c0392b,#8b0000);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px;color:#fff}
+.top-nav .stock-name{font-weight:700;font-size:17px}
+.top-nav .stock-code{font-size:12px;opacity:.7;font-family:var(--font-mono)}
+.nav-links{display:flex;gap:8px;flex-wrap:wrap}
+.nav-links a{font-size:12px;padding:5px 14px;border-radius:16px;color:var(--gold-light);text-decoration:none;border:1px solid transparent;font-weight:500}
+.tag{display:inline-block;padding:3px 12px;border-radius:14px;font-size:11px;font-weight:600;background:rgba(212,168,83,.15);color:var(--gold-light);border:1px solid var(--gold);margin-right:6px}
+.nav-links a:hover{background:rgba(255,255,255,.08);color:#fff;border-color:var(--gold)}
+.theme-toggle{background:rgba(255,255,255,.08);border:1px solid var(--gold-light);color:var(--gold-light);padding:5px 14px;border-radius:16px;font-size:12px;cursor:pointer}
+.hero{background:linear-gradient(105deg,#1c1010,#2c1a1a 50%,#3d2424);border-radius:var(--radius);padding:28px 32px;margin-bottom:24px;border:1px solid var(--gold-light);display:flex;flex-wrap:wrap;gap:24px;align-items:center;color:#fff;position:relative;overflow:hidden}
+.hero-price-block{display:flex;align-items:baseline;gap:12px;z-index:1}
+.hero-price{font-size:56px;font-weight:900;line-height:1;font-family:var(--font-mono)}
+.hero-change{font-size:20px;font-weight:700;padding:4px 12px;border-radius:6px;font-family:var(--font-mono)}
+.hero-change.up{background:rgba(245,86,86,.2);color:#f87171}
+.hero-change.dn{background:rgba(40,199,91,.2);color:#4ade80}
+.hero-meta{display:flex;gap:28px;flex-wrap:wrap;z-index:1}
+.hero-meta-item{text-align:center}
+.hero-meta-item .val{font-size:22px;font-weight:700;font-family:var(--font-mono);color:var(--gold-light)}
+.hero-meta-item .label{font-size:11px;color:rgba(255,255,255,.7)}
+.hero-tags{display:flex;gap:8px;flex-wrap:wrap;z-index:1;width:100%}
+.hero-tag{background:rgba(255,255,255,.08);border:1px solid rgba(255,215,0,.3);color:var(--gold-light);padding:5px 14px;border-radius:20px;font-size:12px}
+.conclusion-top{background:linear-gradient(135deg,#1e1a10,#241f14);border:2px solid var(--gold);border-radius:var(--radius);padding:22px 28px;margin-bottom:24px;position:relative}
+.conclusion-top::before{content:'核心结论';position:absolute;top:-13px;left:24px;background:var(--gold);color:#000;padding:3px 16px;border-radius:12px;font-weight:700;font-size:12px}
+.conclusion-top .big-verdict{font-weight:800;font-size:20px;color:#fff;margin-top:8px}
+.conclusion-top .verdict-tags{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+.conclusion-top .verdict-detail{font-size:14px;color:var(--text-secondary);margin-top:8px;line-height:1.7}
+.card{background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:22px 28px;margin-bottom:20px}
+.card-header{display:flex;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid var(--border)}
+.card-header .icon{width:32px;height:32px;border-radius:8px;background:rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--gold)}
+.card-header h2{font-size:18px;font-weight:700;color:#fff}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.val-up{color:var(--red-up);font-weight:600}
+.val-dn{color:var(--green-down);font-weight:600}
+.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;font-size:13px}
+.info-grid dt{color:var(--text-muted)}.info-grid dd{color:var(--text-secondary)}
+table.cns{width:100%;border-collapse:collapse;font-size:13px;background:var(--card-bg-alt);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:12px 0}
+table.cns thead th{background:linear-gradient(180deg,#2c1a1a,#1c1010);color:#fff;padding:10px 12px;text-align:left;font-size:12px}
+table.cns td{padding:9px 12px;border-bottom:1px dashed var(--border);color:var(--text-secondary)}
+.rating{background:linear-gradient(135deg,#1e1a10,#241f14);border:2px solid var(--gold);border-radius:var(--radius);padding:18px 24px;margin-top:16px;display:flex;align-items:center;gap:16px}
+.rating .badge{min-width:64px;height:64px;border-radius:50%;background:var(--gold);color:#000;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:900}
+.rating .body .title{font-size:16px;font-weight:700;color:#fff}
+.rating .body .desc{font-size:12px;color:var(--text-secondary);margin-top:4px}
+.alert-list{list-style:none;padding:0}
+.alert-list li{padding:8px 14px;margin:6px 0;border-radius:6px;background:var(--card-bg-alt);border-left:4px solid var(--orange-warn);font-size:13px;color:var(--text-secondary)}
+.chain-svg{background:var(--card-bg-alt);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin:16px 0;text-align:center}
+.chain-svg .svg-hdr{fill:var(--text-primary)}
+.chain-svg .svg-sub{fill:var(--text-secondary)}
+footer{text-align:center;padding:24px;font-size:12px;color:var(--text-muted);border-top:1px solid var(--border);margin-top:24px}
+</style>
+<script>function toggleTheme(){var b=document.documentElement;b.classList.toggle('light-mode');document.getElementById('tb').textContent=b.classList.contains('light-mode')?'🌙深色':'☀浅色'}</script></head><body>
+<nav class="top-nav">
+<div class="logo"><div class="logo-icon">中</div><span class="stock-name">中国巨石</span><span class="stock-code">600176.SH</span></div>
+<div class="nav-links"><a href="#hero">行情</a><a href="#conclusion-top">结论</a><a href="#profile">画像</a><a href="#kline-section">K线</a><a href="#mission">任务</a><a href="#macro">宏观</a><a href="#chain">产业链</a><a href="#quality">质量</a><a href="#elasticity">弹性</a><a href="#risk">风险</a><a href="#valuation">估值</a><a href="#compare">对标</a><a href="#tracking">跟踪</a><a href="#technical">技术面</a></div>
+<span style="font-size:12px;color:var(--text-muted)">📅2026-08-01</span>
+<button class="theme-toggle" id="tb" onclick="toggleTheme()">☀浅色</button>
+</nav>
+
+<div class="hero" id="hero">
+<div class="hero-price-block"><span class="hero-price">37.84</span><span class="hero-change up">+3.30%</span></div>
+<div class="hero-meta">
+<div class="hero-meta-item"><div class="val">2026-08-01</div><div class="label">基准日</div></div>
+<div class="hero-meta-item"><div class="val">65分(B级)</div><div class="label">公司质地</div></div>
+<div class="hero-meta-item"><div class="val">50-55元</div><div class="label">目标价</div></div>
+<div class="hero-meta-item"><div class="val">2.0x</div><div class="label">盈亏比</div></div>
+<div class="hero-meta-item"><div class="val" style="color:var(--red-up)">中高</div><div class="label">风险</div></div>
+</div>
+<div class="hero-tags"><span class="hero-tag">玻纤龙头</span><span class="hero-tag">超跌反弹</span><span class="hero-tag">业绩预增</span><span class="hero-tag">PCB证伪</span><span class="hero-tag">中线配置</span><span class="hero-tag">高波动</span><span class="hero-tag">跌停日</span></div>
+</div>
+
+<div class="conclusion-top" id="conclusion-top">
+<div class="big-verdict">🎯超跌反弹+业绩驱动,玻纤涨价逻辑真实,但PCB炒作已证伪</div>
+<div class="verdict-detail">中国巨石(600176)是全球玻纤产能第一的绝对龙头。2026H1归母净利预增65-85%(27.84-31.21亿),毛利率39.64%创近年新高。但6月因PCB概念炒作暴涨至77.2元(+89%),随后公司公告澄清特种电子布无收入,炒作逻辑崩塌导致暴跌53%至35.95。7/27涨停至41.07属技术性超跌反弹。建议在38-42元区间轻仓试探,止损35元,中期目标50-55元。关键跟踪: 8/27中报、电子布报价、MA10。</div>
+<div class="verdict-tags" style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap"><span class="tag">超跌配置</span><span class="tag">仓位10%</span><span class="tag">业绩驱动</span><span class="tag">高波动</span></div>
+<div style="display:flex;gap:20px;margin-top:14px;padding-top:12px;border-top:1px dashed var(--border);flex-wrap:wrap">
+<div style="text-align:center"><div style="font-size:11px;color:var(--text-muted)">买入区间</div><div style="font-weight:700;color:var(--green-down);font-size:15px">38-42元</div></div>
+<div style="text-align:center"><div style="font-size:11px;color:var(--text-muted)">止损位</div><div style="font-weight:700;color:var(--green-down);font-size:15px">35元</div></div>
+<div style="text-align:center"><div style="font-size:11px;color:var(--text-muted)">目标价</div><div style="font-weight:700;color:var(--red-up);font-size:15px">50-55元</div></div>
+<div style="text-align:center"><div style="font-size:11px;color:var(--text-muted)">建议仓位</div><div style="font-weight:700;color:var(--gold-light);font-size:15px">仓位10%</div></div>
+<div style="text-align:center"><div style="font-size:11px;color:var(--text-muted)">盈亏比</div><div style="font-weight:700;color:var(--gold-light);font-size:15px">2.0x</div></div>
+</div></div>
+
+<!-- 公司画像 + 近期动态 -->
+<div class="grid-2" id="profile">
+<div class="card"><div class="card-header"><span class="icon">🏢</span><h2>公司画像</h2></div>
+<p style="color:var(--text-secondary)"><strong style="color:var(--red-up)">主营业务：</strong>玻璃纤维纱及制品, 电子纱及电子布, 其中:内销</p>
+<div style="margin:12px 0"><span class="tag">中国巨石</span><span class="tag">玻璃纤维纱及制品</span><span class="tag">电子纱及电子布</span><span class="tag">其中:内销</span><span class="tag">其中:出口</span></div>
+<dl class="info-grid" style="margin-top:12px">
+<dt>公司全称</dt><dd>中国巨石</dd>
+<dt>上市日期</dt><dd>—</dd>
+<dt>所属行业</dt><dd>—</dd>
+<dt>总股本</dt><dd>—</dd>
+<dt>实际控制人</dt><dd>—</dd>
+</dl>
+</div>
+<div class="card"><div class="card-header"><span class="icon">📰</span><h2>近期动态</h2></div>
+<p style="color:var(--text-muted)">暂无新闻数据（API限制），请参考WebSearch搜索结果。</p></div>
+</div>
+
+<!-- 主营业务饼图 + 关键财务指标 -->
+<div class="grid-2">
+<div class="card"><div class="card-header"><span class="icon">📊</span><h2>主营业务构成</h2><span class="sub">2026-03-31</span></div>
+<div style="width:100%;height:200px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);background:var(--card-bg-alt);border-radius:8px">📊 饼图区域</div>
+<div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:6px">玻璃纤维纱及制品() | 电子纱及电子布()</div>
+</div>
+<div class="card"><div class="card-header"><span class="icon">📈</span><h2>关键财务指标</h2><span class="sub">近5期</span></div>
+<table class="cns"><thead><tr><th>报告期</th><th>营业总收入</th><th>净利润</th><th>基本每股收益</th><th>净资产收益率</th><th>销售毛利率</th></tr></thead><tbody><tr><td>2025-03-31</td><td>44.79亿</td><td>7.30亿</td><td>0.1825</td><td>2.40%</td><td>30.53%</td></tr><tr><td>2025-06-30</td><td>91.09亿</td><td>16.87亿</td><td>0.4214</td><td>5.49%</td><td>32.21%</td></tr><tr><td>2025-09-30</td><td>139.04亿</td><td>25.68亿</td><td>0.6415</td><td>8.32%</td><td>32.42%</td></tr><tr><td>2025-12-31</td><td>188.81亿</td><td>32.85亿</td><td>0.8213</td><td>10.62%</td><td>33.12%</td></tr><tr><td>2026-03-31</td><td>52.82亿</td><td>12.67亿</td><td>0.3193</td><td>4.00%</td><td>39.64%</td></tr></tbody></table>
+</div>
+</div>
+
+<!-- K线图 -->
+<div class="card" id="kline-section"><div class="card-header"><span class="icon">📈</span><h2>K线图 · 近120交易日</h2><span class="sub">前复权日K</span></div>
+<p style="color:var(--text-muted);text-align:center;padding:40px">请在Streamlit页面查看K线图表</p>
+<div class="kpi-info-row" style="display:flex;justify-content:space-around;margin-top:18px;padding-top:14px;border-top:2px solid var(--border)">
+<div class="kpi-info-item" style="text-align:center"><div class="label" style="font-size:12px;color:var(--text-muted)">向上空间(目标价)</div><div class="value" style="font-size:20px;font-weight:700;color:var(--gold-light)">+-23.9%</div></div>
+<div class="kpi-info-item" style="text-align:center"><div class="label" style="font-size:12px;color:var(--text-muted)">盈亏比</div><div class="value" style="font-size:20px;font-weight:700;color:var(--gold-light)">2.0x</div></div>
+<div class="kpi-info-item" style="text-align:center"><div class="label" style="font-size:12px;color:var(--text-muted)">目标价(中期)</div><div class="value" style="font-size:20px;font-weight:700;color:var(--gold-light)">50-55元</div></div>
+<div class="kpi-info-item" style="text-align:center"><div class="label" style="font-size:12px;color:var(--text-muted)">建议周期</div><div class="value" style="font-size:20px;font-weight:700;color:var(--gold-light)">3-6月</div></div>
+</div></div>
+
+<!-- Step 0: 任务锁定 -->
+<div class="card" id="mission"><div class="card-header"><span class="icon">🎯</span><h2>任务锁定与核心矛盾</h2></div><p style="color:var(--text-secondary);line-height:1.8">中国巨石是全球玻纤产能第一的龙头企业(市占率>30%)。6月因PCB概念炒作暴涨至77.2元(+89%),随后公司澄清特种电子布无收入,股价暴跌53%至35.95。当前处于超跌反弹阶段,H1业绩预增65-85%验证基本面改善。适合在超跌区间中线配置,不宜追涨。</p><div style="margin-top:14px;display:flex;gap:16px;flex-wrap:wrap"><div style="background:var(--card-bg-alt);padding:10px 16px;border-radius:8px;text-align:center"><div style="font-size:11px;color:var(--text-muted)">标的</div><div style="font-weight:700;color:var(--text-primary)">中国巨石 600176.SH</div></div><div style="background:var(--card-bg-alt);padding:10px 16px;border-radius:8px;text-align:center"><div style="font-size:11px;color:var(--text-muted)">周期</div><div style="font-weight:700;color:var(--text-primary)">中线 3-6月</div></div><div style="background:var(--card-bg-alt);padding:10px 16px;border-radius:8px;text-align:center"><div style="font-size:11px;color:var(--text-muted)">风格预判</div><div style="font-weight:700;color:var(--text-primary)">超跌反弹+周期修复</div></div><div style="background:var(--card-bg-alt);padding:10px 16px;border-radius:8px;text-align:center"><div style="font-size:11px;color:var(--text-muted)">核心命题</div><div style="font-weight:700;color:var(--text-primary)">暴跌后的价值回归</div></div></div></div>
+
+<!-- Step 1: 宏观与周期定位 -->
+<div class="card" id="macro"><div class="card-header"><span class="icon">🌍</span><h2>宏观与周期定位</h2></div><div style="margin-bottom:16px"><h3 style="font-size:15px;color:var(--gold-light);margin-bottom:8px">经济周期映射</h3><ul style="list-style:none;padding:0;font-size:13px;color:var(--text-secondary)"><li style="padding:4px 0">• 宏观经济阶段: 玻纤下游风电、新能源汽车、AI算力PCB三轮需求拉动,行业处于景气上行初期</li><li style="padding:4px 0">• 行业周期位置: 2022-2024产能过剩后,2025H2粗纱价格触底反弹,毛利率从30.5%修复至39.6%</li><li style="padding:4px 0">• 政策周期: 风电装机年增60GW+、欧洲反倾销税2025年到期复审、AI算力自主可控</li><li style="padding:4px 0">• 公司所处阶段: Q1 2026营收+17.9%、净利+73.5%,H1预增65-85%</li></ul></div><div style="margin-bottom:16px"><h3 style="font-size:15px;color:var(--gold-light);margin-bottom:8px">政策与环境扫描</h3><ul style="list-style:none;padding:0;font-size:13px;color:var(--text-secondary)"><li style="padding:4px 0">• 业绩预增: 2026H1归母净利27.84-31.21亿(+65-85%),Q2环比+19-46%</li><li style="padding:4px 0">• 特种电子布澄清: 6/17公告低介电特种电子布未形成订单及收入,PCB概念炒作逻辑被证伪</li><li style="padding:4px 0">• 股权激励: 2025年限制性股票激励计划落地(6/27)</li><li style="padding:4px 0">• 股东动态: 振石集团2024-11至2025-02增持4360万股,股东户数暴增30%</li></ul></div><div style="background:var(--card-bg-alt);padding:14px 18px;border-radius:8px;border-left:4px solid var(--gold)"><h3 style="font-size:15px;color:var(--gold-light);margin-bottom:6px">核心矛盾</h3><p style="font-size:14px;color:var(--text-secondary)">H1业绩高增65-85%的基本面 vs 炒作逻辑证伪后的估值回归 -- 基本面在改善,但股价从77.2跌到35.95(-53%)已充分反映炒作退潮。</p></div></div>
+
+<!-- Step 2: 产业链深度拆解 -->
+<div class="card" id="chain"><div class="card-header"><span class="icon">🔗</span><h2>产业链深度拆解</h2></div><div style="margin-bottom:16px"><h3 style="font-size:15px;color:var(--gold-light);margin-bottom:8px">题材来源判断</h3><p style="font-size:13px;color:var(--text-secondary);line-height:1.8">1. <strong style="color:var(--red-up);">玻纤涨价(核心逻辑)：</strong>粗纱价格触底反弹,H1预增65-85%验证量价齐升<br></p><p style="font-size:13px;color:var(--text-secondary);line-height:1.8">2. <strong style="color:var(--green-down);">PCB概念(已证伪)：</strong>6/17澄清特种电子布无收入,炒作逻辑不成立<br></p><p style="font-size:13px;color:var(--text-secondary);line-height:1.8">3. <strong style="color:var(--gold-light);">超跌反弹(当前交易)：</strong>从77.2跌到35.95(-53%),短线超卖后技术性反弹<br></p></div><h3 style="font-size:15px;color:var(--gold-light);margin-bottom:8px">产业链图谱</h3><div class="chain-svg"><svg viewBox="0 0 800 150" xmlns="http://www.w3.org/2000/svg"><defs><marker id="ar" markerWidth="10" markerHeight="10" refX="9" refY="4" orient="auto"><polygon points="0 0,10 4,0 8" fill="#d4a853"/></marker></defs><rect x="10" y="25" width="150" height="100" fill="var(--card-bg-alt)" stroke="#d4a853" stroke-width="2" rx="10"/><text x="85" y="50" text-anchor="middle" font-weight="700" font-size="14" class="svg-hdr">上游: 原料能源</text><text x="85" y="62" text-anchor="middle" font-size="11" class="svg-sub">叶腊石/高岭土</text><text x="85" y="78" text-anchor="middle" font-size="11" class="svg-sub">天然气(成本25%)</text><text x="85" y="94" text-anchor="middle" font-size="11" class="svg-sub">铂铑合金漏板</text><line x1="160" y1="75" x2="230" y2="75" stroke="#d4a853" stroke-width="2" marker-end="url(#ar)"/><rect x="235" y="10" width="220" height="130" fill="var(--card-bg-alt)" stroke="#f55656" stroke-width="3" rx="12"/><text x="345" y="35" text-anchor="middle" font-weight="800" font-size="16" fill="#f55656">中游: 池窑拉丝</text><text x="345" y="52" text-anchor="middle" font-size="12" class="svg-sub">粗纱(风电/建筑)</text><text x="345" y="68" text-anchor="middle" font-size="12" class="svg-sub">普通电子布(PCB)</text><text x="345" y="84" text-anchor="middle" font-size="12" class="svg-sub">短切/热塑(汽车)</text><line x1="455" y1="75" x2="525" y2="75" stroke="#d4a853" stroke-width="2" marker-end="url(#ar)"/><rect x="530" y="25" width="250" height="100" fill="var(--card-bg-alt)" stroke="#d4a853" stroke-width="2" rx="10"/><text x="655" y="50" text-anchor="middle" font-weight="700" font-size="14" class="svg-hdr">下游: 应用领域</text><text x="655" y="62" text-anchor="middle" font-size="11" class="svg-sub">风电叶片(25%)</text><text x="655" y="78" text-anchor="middle" font-size="11" class="svg-sub">建筑建材(20%)</text><text x="655" y="94" text-anchor="middle" font-size="11" class="svg-sub">PCB+汽车(35%)</text></svg></div><div class="grid-2" style="margin-top:16px"><div><h3 style="font-size:15px;color:var(--gold-light);margin-bottom:8px">趋势三要素</h3><table class="cns"><thead><tr><th>维度</th><th>评估</th><th>打分</th></tr></thead><tbody><tr><td>玻纤涨价确定性</td><td>H1预增65-85%,毛利率39.6%新高</td><td>5/5星</td></tr><tr><td>电子布成长性</td><td>普通布有收入,特种布暂无量产</td><td>3/5星</td></tr><tr><td>公司竞争卡位</td><td>全球产能第一,成本最低</td><td>4/5星</td></tr></tbody></table></div><div><h3 style="font-size:15px;color:var(--gold-light);margin-bottom:8px">价值链利润分布</h3><table class="cns"><thead><tr><th>环节</th><th>代表企业</th><th>毛利率</th></tr></thead><tbody><tr><td>上游: 矿石/能源</td><td>叶腊石矿/天然气</td><td>10-15%</td></tr><tr><td>中游: 粗纱池窑拉丝</td><td>中国巨石/泰山玻纤</td><td>30-40%</td></tr><tr><td>中游: 普通电子布</td><td>中国巨石/光远新材</td><td>45-55%</td></tr><tr><td>下游: 风电叶片</td><td>中材科技/时代新材</td><td>15-25%</td></tr></tbody></table></div></div><p style="font-size:13px;color:var(--text-secondary);margin-top:12px;padding:10px 14px;background:var(--card-bg-alt);border-radius:6px">💡 <strong>关键判断：</strong>普通电子布毛利率52.9%是真实利润弹性来源,但特种电子布短期无法贡献收入。玻纤涨价驱动的盈利修复才是最确定的逻辑。</p></div>
+
+<!-- Step 3: 公司筛选与质量评分 -->
+<div class="card" id="quality"><div class="card-header"><span class="icon">⭐</span><h2>公司筛选与质量评分</h2><span class="sub">65/100 · 良好</span></div>
+<table class="cns"><thead><tr><th>维度</th><th>状态</th><th>加减分</th></tr></thead><tbody><tr><td>短期趋势</td><td class="val-dn">✗</td><td>+10/-10</td></tr><tr><td>中期趋势</td><td class="val-dn">✗</td><td>+10/-5</td></tr><tr><td>MACD</td><td class="val-dn">✗</td><td>+8/-8</td></tr><tr><td>ROE</td><td class="val-dn">✗</td><td>-5</td></tr><tr><td>毛利率</td><td class="val-dn">✗</td><td>+4</td></tr></tbody></table>
+<div class="rating"><div class="badge">65</div><div class="body"><div class="title">超跌反弹+业绩驱动,玻纤涨价逻辑真实,但PCB炒作已证伪</div><div class="desc">38-42元轻仓试探,跌破35元止损。基本面改善(预增65-85%)是支撑,但炒作逻辑已证伪,不宜重仓。</div></div></div></div>
+
+<!-- Step 4-8: 占位卡片（逐步填充） -->
+<div class="card" id="elasticity"><div class="card-header"><span class="icon">⚡</span><h2>业绩弹性测算</h2></div><h3 style="font-size:15px;color:var(--gold-light);margin-bottom:10px">分业务弹性树</h3><div style="background:var(--card-bg-alt);border:2px solid var(--gold);border-radius:10px;padding:16px;margin-bottom:16px"><div style="display:flex;flex-direction:column;align-items:center"><div style="background:linear-gradient(135deg,#1e1a10,#2c1a1a);border:2px solid var(--gold);border-radius:10px;padding:10px 24px;font-weight:700;font-size:15px;color:var(--text-primary)">中国巨石 FY2025营收 188.81亿</div><div style="display:flex;width:100%;margin-top:6px"><div style="flex:2;text-align:center;border-top:2px solid var(--gold)"></div><div style="flex:1;border-top:2px solid var(--gold)"></div><div style="flex:1;border-top:2px solid var(--gold)"></div></div><div style="display:flex;gap:10px;width:100%;margin-top:10px"><div style="flex:1;background:rgba(245,86,86,0.08);border:1px solid rgba(245,86,86,0.3);border-radius:8px;padding:12px;text-align:center"><div style="font-weight:700;color:var(--red-up);font-size:13px">🔴 玻璃纤维纱及制品</div><div style="font-size:11px;color:var(--text-muted)">74.8% | 141亿·毛利率33.9%</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">粗纱(风电/建筑)<br>细纱(电子/汽车)<br>短切纤维</div><div style="font-size:11px;color:var(--text-muted);margin-top:4px">弹性: 玻纤涨价1% -> 利润+4.2亿</div></div><div style="flex:1;background:rgba(212,168,83,0.08);border:1px solid rgba(212,168,83,0.3);border-radius:8px;padding:12px;text-align:center"><div style="font-weight:700;color:var(--gold-light);font-size:13px">🟡 其他纱及电子布</div><div style="font-size:11px;color:var(--text-muted)">24.3% | 45.9亿·毛利率52.9%</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">电子布(PCB)<br>工业织物<br>特殊纱</div><div style="font-size:11px;color:var(--text-muted);margin-top:4px">弹性: 电子布涨0.2元/米 -> 利润+2亿</div></div><div style="flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center"><div style="font-weight:700;color:var(--text-secondary);font-size:13px">⚪ 其他</div><div style="font-size:11px;color:var(--text-muted)">0.9% | 1.7亿·毛利率72.2%</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">副产品/废料</div><div style="font-size:11px;color:var(--text-muted);margin-top:4px">稳定性强,弹性弱</div></div></div></div></div><h3 style="font-size:15px;color:var(--gold-light);margin:16px 0 10px">价格敏感度公式</h3><div style="background:var(--card-bg-alt);border-radius:8px;padding:14px 18px;margin-bottom:12px"><div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;text-align:center">核心公式</div><div style="font-family:var(--font-mono);font-size:14px;color:var(--text-primary);text-align:center;padding:10px 16px;background:rgba(245,86,86,0.06);border-radius:8px;margin-bottom:10px"><strong>净利润 = 销量 x (单价 - 单位成本) x (1 - 税率15%)</strong></div><div class="grid-2" style="margin-top:12px"><div style="rgba(40,199,91,0.06);border-radius:8px;padding:12px;text-align:center"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">悲观: 粗纱价格回落10%</div><div style="font-size:12px;font-family:var(--font-mono);color:var(--text-secondary)">营收170亿 净利25亿</div><div style="font-weight:700;color:var(--green-down);font-size:14px;margin-top:2px">目标价 31元 (PE 15x)</div></div><div style="rgba(212,168,83,0.06);border-radius:8px;padding:12px;text-align:center"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">基准: 维持当前水平</div><div style="font-size:12px;font-family:var(--font-mono);color:var(--text-secondary)">营收195亿 净利33亿</div><div style="font-weight:700;color:var(--gold-light);font-size:14px;margin-top:2px">目标价 41元 (PE 20x)</div></div><div style="rgba(245,86,86,0.06);border-radius:8px;padding:12px;text-align:center"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">乐观: 粗纱涨价5%+电子布翻倍</div><div style="font-size:12px;font-family:var(--font-mono)</div></div></div>
+<div class="card" id="risk"><div class="card-header"><span class="icon">⚠️</span><h2>风险分析</h2><span class="sub">Step 5</span></div><ul class="alert-list"><li>暂无显著风险</li></ul></div>
+<div class="card" id="valuation"><div class="card-header"><span class="icon">💎</span><h2>估值与买卖时机</h2><span class="sub">Step 6</span></div><p style="color:var(--text-muted)">待AI分析补充</p></div>
+<div class="card" id="compare"><div class="card-header"><span class="icon">⚖️</span><h2>对标分析</h2><span class="sub">Step 7</span></div><p style="color:var(--text-muted)">待AI分析补充</p></div>
+<div class="card" id="tracking"><div class="card-header"><span class="icon">📋</span><h2>跟踪计划与综合结论</h2><span class="sub">Step 8</span></div><p style="color:var(--text-muted)">待AI分析补充</p></div>
+
+<div class="card" id="technical"><div class="card-header"><span class="icon">📈</span><h2>技术面与资金面分析</h2><span class="sub">Step 9</span></div><p style="color:var(--text-muted)">待AI分析补充</p></div>
+
+<footer><p>⚠仅供研究参考，不构成投资建议</p><p>📅2026-08-01 23:46 · 数据:akshare</p></footer>
+</body></html>

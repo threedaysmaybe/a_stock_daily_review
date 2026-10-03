@@ -10,32 +10,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config as cfg
 from utils.formatters import fmt_dataframe
 from utils.helpers import fmt_cn
+from utils.ui import inject_css, conclusion
 import data_fetcher as df_
 import visualizer as viz
 import pandas as pd
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="板块分析", page_icon="🔥", layout="wide")
+inject_css()
 
 st.title("🔥 板块分析")
 st.caption(f"交易日：{(st.session_state.get('_trading_day') or pd.Timestamp.now()).strftime('%Y-%m-%d')}")
 
-# ============================================================
-# 从 session_state 读取行业板块数据（app.py 已加载）
-sector_df = st.session_state.get("_sector_df", pd.DataFrame())
-if sector_df.empty:
-    with st.spinner("正在获取行业板块数据..."):
-        sector_df = df_.get_sector_spot()
+# 直接获取（get_sector_spot 内部有本地文件缓存 + 30秒模块缓存，更新后能拿到新数据）
+sector_df = df_.get_sector_spot()
 
 if sector_df.empty:
     st.error("无法获取板块数据")
     st.stop()
 
-# 从 session_state 读取概念板块数据
-concept_df = st.session_state.get("_concept_df", pd.DataFrame())
-if concept_df.empty:
-    with st.spinner("正在获取概念板块数据..."):
-        concept_df = df_.get_concept_spot()
+# 概念板块数据
+concept_df = df_.get_concept_spot()
 
 # ============================================================
 # 获取近5日历史板块数据
@@ -72,7 +67,7 @@ def get_history_data(data_type="sector", days=10):
                     if "sector_name" not in df.columns and len(df.columns) > 0:
                         df["sector_name"] = df.iloc[:, 0]
                     
-                    # 日期优先级：回补标记 > K线真实日期 > 目录名
+                    # 日期：回补标记 → K线日期 → 目录名兜底
                     display_date = date_str[:4] + "-" + date_str[4:6] + "-" + date_str[6:8]
                     is_backfill = False
                     bf_path = os.path.join(data_dir, date_str, "_backfill_date.txt")
@@ -94,7 +89,7 @@ def get_history_data(data_type="sector", days=10):
                                     last_date = pd.to_datetime(idx_df["date"].iloc[-1])
                                     display_date = last_date.strftime("%Y-%m-%d")
                             except Exception:
-                                pass  # K线读取失败则用目录名
+                                pass
                     
                     # 去重：同一交易日只保留第一个（最新下载的）
                     if display_date in seen_dates:
@@ -128,6 +123,14 @@ with tab1:
     cols[1].metric("上涨板块", up_count, delta=f"占比{up_count/len(sector_df)*100:.0f}%", delta_color="inverse")
     cols[2].metric("下跌板块", down_count, delta=f"占比{down_count/len(sector_df)*100:.0f}%")
     cols[3].metric("平均涨跌", f"{avg_pct:+.2f}%", delta_color="inverse")
+
+    # 结论卡片
+    _top_name = sector_df.iloc[0].get("sector_name", "") if len(sector_df) else ""
+    _top_pct = sector_df.iloc[0].get("change_pct", 0) if len(sector_df) else 0
+    conclusion(f"今日领涨：<b>{_top_name}</b>（{_top_pct:+.2f}%）",
+               f"{up_count} 涨 / {down_count} 跌，平均 {avg_pct:+.2f}%。"
+               f"关注领涨板块的持续性与扩散效应。",
+               tone="bull" if up_count > down_count else "bear")
 
     st.divider()
     

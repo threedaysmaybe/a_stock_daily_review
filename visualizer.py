@@ -584,8 +584,16 @@ def plot_kline_echarts(df: pd.DataFrame, title: str = "K线图",
             round(row["high"], 2)
         ])
     
-    # 成交量数据
-    volume_data = df["volume"].tolist()
+    # 成交量/成交额数据：指数用「成交额·亿元」，个股用「成交量·万手」
+    _vol0 = float(df["volume"].iloc[0]) if len(df) and df["volume"].notna().any() else 0
+    if "amount" in df.columns and df["amount"].notna().any() and _vol0 > 1e8:
+        # 指数：成交额（亿元）
+        volume_data = df["amount"].round(1).tolist()
+        vol_name = "成交额(亿元)"
+    else:
+        # 个股：成交量（万手，vol 单位=手，/1e4）
+        volume_data = (df["volume"] / 1e4).round(0).tolist()
+        vol_name = "成交量(万手)"
     
     # 成交量颜色（红涨绿跌）
     volume_colors = []
@@ -619,7 +627,7 @@ def plot_kline_echarts(df: pd.DataFrame, title: str = "K线图",
             "textStyle": {"color": "#E2E8F0", "fontSize": 12}
         },
         "legend": {
-            "data": ["K线"] + [f"MA{p}" for p in ma_lines] + ["成交量"],
+            "data": ["K线"] + [f"MA{p}" for p in ma_lines] + [vol_name],
             "top": 30,
             "textStyle": {"color": "#94A3B8", "fontSize": 11},
             "itemWidth": 12,
@@ -657,6 +665,8 @@ def plot_kline_echarts(df: pd.DataFrame, title: str = "K线图",
             {
                 "scale": True,
                 "gridIndex": 1,
+                "name": vol_name,
+                "nameTextStyle": {"color": "#94A3B8", "fontSize": 10},
                 "axisLabel": {"color": "#94A3B8", "fontSize": 10},
                 "splitLine": {"lineStyle": {"color": "rgba(255,255,255,0.06)"}}
             }
@@ -745,6 +755,22 @@ def plot_kline_echarts(df: pd.DataFrame, title: str = "K线图",
             var dom = document.getElementById('kline-echarts');
             var chart = echarts.init(dom, 'dark');
             var option = {option_json};
+            // 自定义 tooltip：把英文 open/close/low/high 换成中文
+            option.tooltip.formatter = function(params) {{
+                if (!params || !params.length) return '';
+                var html = '<b>' + params[0].axisValue + '</b><br/>';
+                for (var i = 0; i < params.length; i++) {{
+                    var p = params[i];
+                    if (p.seriesType === 'candlestick') {{
+                        var v = p.value;  // [开盘, 收盘, 最低, 最高]
+                        html += '开盘：' + v[0] + '<br/>收盘：' + v[1] + '<br/>最低：' + v[2] + '<br/>最高：' + v[3] + '<br/>';
+                    }} else {{
+                        var nm = p.seriesName || '';
+                        html += nm + '：' + p.data + '<br/>';
+                    }}
+                }}
+                return html;
+            }};
             chart.setOption(option);
             window.addEventListener('resize', function() {{ chart.resize(); }});
         }})();
@@ -775,6 +801,16 @@ def plot_indicator_echarts(df: pd.DataFrame, indicator_type: str, height: int = 
         dea = df["DEA"].round(2).tolist()
         macd = df["MACD"].round(2).tolist()
         macd_colors = ["#DC143C" if v >= 0 else "#228B22" for v in macd]
+
+        # 金叉（DIF 上穿 DEA）/ 死叉（DIF 下穿 DEA）
+        _golden, _dead = [], []
+        for i in range(1, len(dif)):
+            if dif[i] is None or dea[i] is None or dif[i - 1] is None or dea[i - 1] is None:
+                continue
+            if dif[i - 1] <= dea[i - 1] and dif[i] > dea[i]:
+                _golden.append({"coord": [i, round(dif[i], 2)], "value": "金叉"})
+            elif dif[i - 1] >= dea[i - 1] and dif[i] < dea[i]:
+                _dead.append({"coord": [i, round(dif[i], 2)], "value": "死叉"})
         
         option = {
             "title": {
@@ -819,7 +855,13 @@ def plot_indicator_echarts(df: pd.DataFrame, indicator_type: str, height: int = 
             ],
             "series": [
                 {"name": "DIF", "type": "line", "data": dif, "smooth": True, "showSymbol": False,
-                 "lineStyle": {"width": 1.5, "color": "#FFD700"}},
+                 "lineStyle": {"width": 1.5, "color": "#FFD700"},
+                 "markPoint": {"data": [
+                     *[{"coord": g["coord"], "value": "金叉", "itemStyle": {"color": "#D4A853"},
+                        "label": {"color": "#fff", "fontSize": 9, "formatter": "金叉"}} for g in _golden],
+                     *[{"coord": d["coord"], "value": "死叉", "itemStyle": {"color": "#64748B"},
+                        "label": {"color": "#fff", "fontSize": 9, "formatter": "死叉"}} for d in _dead],
+                 ], "symbolSize": 28, "label": {"show": True}}},
                 {"name": "DEA", "type": "line", "data": dea, "smooth": True, "showSymbol": False,
                  "lineStyle": {"width": 1.5, "color": "#60A5FA"}},
                 {"name": "MACD", "type": "bar", "data": macd,
@@ -834,6 +876,16 @@ def plot_indicator_echarts(df: pd.DataFrame, indicator_type: str, height: int = 
         k = df["K"].round(1).tolist()
         d = df["D"].round(1).tolist()
         j = df["J"].round(1).tolist()
+
+        # KDJ 金叉（K 上穿 D）/ 死叉（K 下穿 D）
+        _k_golden, _k_dead = [], []
+        for i in range(1, len(k)):
+            if k[i] is None or d[i] is None or k[i - 1] is None or d[i - 1] is None:
+                continue
+            if k[i - 1] <= d[i - 1] and k[i] > d[i]:
+                _k_golden.append({"coord": [i, round(k[i], 1)], "value": "金叉"})
+            elif k[i - 1] >= d[i - 1] and k[i] < d[i]:
+                _k_dead.append({"coord": [i, round(k[i], 1)], "value": "死叉"})
         
         option = {
             "title": {
@@ -878,7 +930,17 @@ def plot_indicator_echarts(df: pd.DataFrame, indicator_type: str, height: int = 
             ],
             "series": [
                 {"name": "K", "type": "line", "data": k, "smooth": True, "showSymbol": False,
-                 "lineStyle": {"width": 1.5, "color": "#FFD700"}},
+                 "lineStyle": {"width": 1.5, "color": "#FFD700"},
+                 "markPoint": {"data": [
+                     *[{"coord": g["coord"], "value": "金叉", "itemStyle": {"color": "#D4A853"},
+                        "label": {"color": "#fff", "fontSize": 9, "formatter": "金叉"}} for g in _k_golden],
+                     *[{"coord": dd["coord"], "value": "死叉", "itemStyle": {"color": "#64748B"},
+                        "label": {"color": "#fff", "fontSize": 9, "formatter": "死叉"}} for dd in _k_dead],
+                 ], "symbolSize": 28, "label": {"show": True}},
+                 "markLine": {"silent": True, "symbol": "none",
+                              "data": [{"yAxis": 80, "label": {"formatter": "超买 80", "color": "#F87171", "fontSize": 9}},
+                                       {"yAxis": 20, "label": {"formatter": "超卖 20", "color": "#34D399", "fontSize": 9}}],
+                              "lineStyle": {"type": "dashed", "width": 1, "color": "#94A3B8"}}},
                 {"name": "D", "type": "line", "data": d, "smooth": True, "showSymbol": False,
                  "lineStyle": {"width": 1.5, "color": "#60A5FA"}},
                 {"name": "J", "type": "line", "data": j, "smooth": True, "showSymbol": False,
@@ -897,7 +959,11 @@ def plot_indicator_echarts(df: pd.DataFrame, indicator_type: str, height: int = 
         legend_data = ["RSI6"]
         series = [
             {"name": "RSI6", "type": "line", "data": rsi6, "smooth": True, "showSymbol": False,
-             "lineStyle": {"width": 1.5, "color": "#60A5FA"}}
+             "lineStyle": {"width": 1.5, "color": "#60A5FA"},
+             "markLine": {"silent": True, "symbol": "none",
+                          "data": [{"yAxis": 70, "label": {"formatter": "超买 70", "color": "#F87171", "fontSize": 9}},
+                                   {"yAxis": 30, "label": {"formatter": "超卖 30", "color": "#34D399", "fontSize": 9}}],
+                          "lineStyle": {"type": "dashed", "width": 1, "color": "#94A3B8"}}}
         ]
         if rsi12:
             legend_data.append("RSI12")
@@ -1034,3 +1100,53 @@ def plot_indicator_echarts(df: pd.DataFrame, indicator_type: str, height: int = 
         }})();
     </script>
     '''
+
+
+def plot_fund_flow_trend(df: pd.DataFrame):
+    """全市场主力净流入折线图（近1月，亿元）。df 需含「日期」「主力净流入-净额」。"""
+    if df is None or df.empty:
+        return None
+    d = df.copy()
+    d["日期"] = pd.to_datetime(d["日期"], format="%Y%m%d", errors="coerce").dt.strftime("%m-%d")
+    d = d.dropna(subset=["日期"]).sort_values("日期")
+    net = pd.to_numeric(d["主力净流入-净额"], errors="coerce") / 1e4  # 万元 → 亿元
+    net = net.round(2)
+    colors = ["#DC143C" if v >= 0 else "#228B22" for v in net]
+    fig = go.Figure(go.Scatter(
+        x=d["日期"], y=net, mode="lines+markers", name="主力净流入(亿)",
+        line=dict(color="#60A5FA", width=2),
+        marker=dict(color=colors, size=7, line=dict(color="#0F172A", width=1)),
+    ))
+    fig.add_hline(y=0, line=dict(color="#64748B", width=1))
+    fig.update_layout(
+        title="全市场主力净流入（近1月，亿元）", height=280,
+        margin=dict(l=10, r=10, t=40, b=10), template="plotly_dark",
+        xaxis_title="", yaxis_title="亿元", showlegend=False,
+        xaxis={"type": "category"},
+    )
+    return fig
+
+
+def plot_northbound_trend(df: pd.DataFrame):
+    """北向资金当日净流入折线图（近1月，亿元）。df 需含「trade_date」「当日净流入」。"""
+    if df is None or df.empty:
+        return None
+    d = df.copy()
+    d["日期"] = pd.to_datetime(d["trade_date"], format="%Y%m%d", errors="coerce").dt.strftime("%m-%d")
+    d = d.dropna(subset=["日期"]).sort_values("日期")
+    net = pd.to_numeric(d["当日净流入"], errors="coerce")
+    net = net.round(2)
+    colors = ["#DC143C" if v >= 0 else "#228B22" for v in net]
+    fig = go.Figure(go.Scatter(
+        x=d["日期"], y=net, mode="lines+markers", name="北向净流入(亿)",
+        line=dict(color="#60A5FA", width=2),
+        marker=dict(color=colors, size=7, line=dict(color="#0F172A", width=1)),
+    ))
+    fig.add_hline(y=0, line=dict(color="#64748B", width=1))
+    fig.update_layout(
+        title="北向资金当日净流入（近1月，亿元）", height=280,
+        margin=dict(l=10, r=10, t=40, b=10), template="plotly_dark",
+        xaxis_title="", yaxis_title="亿元", showlegend=False,
+        xaxis={"type": "category"},
+    )
+    return fig

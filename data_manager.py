@@ -12,18 +12,52 @@ import akshare as ak
 import streamlit as st
 
 import config as cfg
-try:
-    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "portfolio.json"), "r", encoding="utf-8") as _pf:
-        _local_pf = json.load(_pf)
-except Exception:
-    _local_pf = dict(cfg.PORTFOLIO)
 
 # 本地数据目录
 DATA_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
+
+def _load_portfolio() -> dict:
+    """每次读取最新持仓（统一走 load_portfolio，代码规范化）。"""
+    return load_portfolio()
+
 def _today_str() -> str:
     """获取今天的日期字符串"""
     return datetime.now().strftime("%Y%m%d")
+
+
+def norm_code(raw) -> str:
+    """股票代码统一成6位纯数字（去 sz/sh/bj 前缀 + 去 .SZ/.SH 后缀）。"""
+    s = str(raw).strip().lower()
+    s = s.replace("sz", "").replace("sh", "").replace("bj", "")
+    s = s.split(".")[0]
+    return s.zfill(6)
+
+
+def load_portfolio() -> dict:
+    """统一加载持仓：优先 data/portfolio.json（用户实际持仓），非空则不用 config 默认。
+
+    注意：config.PORTFOLIO 只是「首次使用」的兜底，一旦 portfolio.json 有数据，
+    就以用户保存的为准，绝不合并，避免删除的持仓又冒出来。
+    """
+    path = os.path.join(DATA_ROOT, "portfolio.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if data:
+                return {norm_code(c): n for c, n in data.items()}
+        except Exception:
+            pass
+    return {norm_code(c): n for c, n in cfg.PORTFOLIO.items()}
+
+
+def save_portfolio(data: dict):
+    """统一保存持仓到 data/portfolio.json（代码规范化）。"""
+    os.makedirs(DATA_ROOT, exist_ok=True)
+    clean = {norm_code(c): n for c, n in data.items()}
+    with open(os.path.join(DATA_ROOT, "portfolio.json"), "w", encoding="utf-8") as f:
+        json.dump(clean, f, ensure_ascii=False, indent=2)
 
 def _today_dir() -> str:
     """今天的数据目录"""
@@ -87,7 +121,7 @@ def download_all(progress_callback=None) -> dict:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
     # 扫描缺失板块数据（不在此回补，返回列表给 app 层控制进度）
-    meta["backfill_needed"] = _scan_missing_dates(today, max_days=2)
+    meta["backfill_needed"] = _scan_missing_dates(today, max_days=10)
 
     return meta
 
@@ -120,6 +154,15 @@ def _scan_missing_dates(today_dir: str, max_days: int = 2) -> list:
             missing.append((date_str, "concepts"))
     return missing
 
+
+
+def download_lhb() -> pd.DataFrame:
+    """下载龙虎榜（按需调用）"""
+    df = _download_lhb()
+    if not df.empty:
+        today = _today_dir()
+        _save({"filename": "lhb.csv"}, df, today)
+    return df
 
 def backfill_one(date_str: str, kind: str) -> bool:
     """回补单条板块数据"""
@@ -166,14 +209,15 @@ def _build_task_list() -> list:
     })
 
     # 4. 个股K线
-    for code in _local_pf:
+    pf = _load_portfolio()
+    for code in pf:
         tasks.append({
-            "name": f"{_local_pf[code]}",
+            "name": f"{pf[code]}",
             "filename": f"stock_{code}.csv",
             "fn": lambda c=code: _download_stock_kline(c),
         })
         tasks.append({
-            "name": f"{_local_pf[code]} 财务",
+            "name": f"{pf[code]} 财务",
             "filename": f"stock_{code}_fin.json",
             "fn": lambda c=code: _download_stock_financial(c),
         })
@@ -185,14 +229,7 @@ def _build_task_list() -> list:
         "fn": _download_limit_up,
     })
 
-    # 6. 龙虎榜
-    tasks.append({
-        "name": "龙虎榜数据",
-        "filename": "lhb.csv",
-        "fn": _download_lhb,
-    })
-
-    # 7. 股票列表（搜索用）
+    # 6. 股票列表（搜索用）
     tasks.append({
         "name": "全市场股票列表",
         "filename": "stock_list.csv",
@@ -207,22 +244,34 @@ def _build_task_list() -> list:
 # ============================================================
 
 def _download_index_kline(code: str) -> pd.DataFrame:
-    """下载指数K线（东方财富源，含成交额）"""
-    prefix = "sh" if code.startswith("000") or code.startswith("60") else "sz"
+    """下载指数K线（Tushare index_daily，稳定不封）。"""
     try:
-        df = ak.stock_zh_index_daily_em(symbol=f"{prefix}{code}", start_date="20200101", end_date="20991231")
-        if df is not None and not df.empty:
-            df["date"] = pd.to_datetime(df["date"])
-            df = df.sort_values("date").tail(120).reset_index(drop=True)
-        return df or pd.DataFrame()
-    except Exception:
-        # 兜底：新浪源（无amount列）
+        from tushare_source import TushareSource
+        src = TushareSource(cfg.TUSHARE_TOKEN)
+        ts_map = {"000001": "000001.SH", "399001": "399001.SZ", "399006": "399006.SZ", "000688": "000688.SH"}
+        ts_code = ts_map.get(code)
+        if ts_code:
+            df = src.pro.index_daily(ts_code=ts_code, start_date="20200101",
+                                     end_date=datetime.now().strftime("%Y%m%d"))
+            if df is not None and not df.empty:
+                df = df.rename(columns={"trade_date": "date", "vol": "volume"})
+                df["date"] = pd.to_datetime(df["date"])
+                if "amount" in df.columns:
+                    df["amount"] = df["amount"] / 1e5  # 千元 → 亿元
+                df = df.sort_values("date").tail(120).reset_index(drop=True)
+                return df
+    except Exception:  # noqa: BLE001
+        pass
+    # 兜底：新浪源
+    try:
+        prefix = "sh" if code.startswith("000") or code.startswith("60") else "sz"
         df = ak.stock_zh_index_daily(symbol=f"{prefix}{code}")
         if df is not None and not df.empty:
             df["date"] = pd.to_datetime(df["date"])
-            df["amount"] = 0
             df = df.sort_values("date").tail(120).reset_index(drop=True)
         return df or pd.DataFrame()
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame()
 
 
 def _download_sectors() -> pd.DataFrame:
@@ -236,12 +285,14 @@ def _download_sectors() -> pd.DataFrame:
                 "上涨家数": "up_count",
                 "下跌家数": "down_count",
                 "领涨股": "top_stock",
+                "总成交额": "total_amount",
             })
             df["change_pct"] = df["change_pct"].apply(_to_float)
+            df["total_amount"] = df.get("total_amount", 0).apply(_to_float) if "total_amount" in df.columns else 0
             for col in ["up_count", "down_count", "top_stock"]:
                 if col not in df.columns:
                     df[col] = 0 if col != "top_stock" else ""
-            df = df[["sector_name", "change_pct", "up_count", "down_count", "top_stock"]]
+            df = df[["sector_name", "change_pct", "up_count", "down_count", "top_stock", "total_amount"]]
             df = df.sort_values("change_pct", ascending=False).reset_index(drop=True)
             return df
     except Exception:
@@ -310,13 +361,23 @@ def _download_sentiment() -> dict:
             if "down_count" in sectors.columns:
                 down = int(sectors["down_count"].sum())
         
+        # 成交额：优先从行业数据 total_amount 汇总
         total_amt = 0
-        kline_path = os.path.join(DATA_ROOT, td, "index_000001.csv")
-        if os.path.exists(kline_path):
-            idx = pd.read_csv(kline_path)
-            col = "amount" if "amount" in idx.columns else ("volume" if "volume" in idx.columns else None)
-            if col and not idx.empty:
-                total_amt = float(idx[col].iloc[-1]) / 1e8  # 元→亿元
+        if os.path.exists(sectors_path):
+            try:
+                sdf = pd.read_csv(sectors_path)
+                if "total_amount" in sdf.columns:
+                    total_amt = sdf["total_amount"].astype(float).sum()
+            except Exception:
+                pass
+        if total_amt == 0:
+            # 兜底：上证K线
+            kline_path = os.path.join(DATA_ROOT, td, "index_000001.csv")
+            if os.path.exists(kline_path):
+                idx = pd.read_csv(kline_path)
+                col = "amount" if "amount" in idx.columns else ("volume" if "volume" in idx.columns else None)
+                if col and not idx.empty:
+                    total_amt = float(idx[col].iloc[-1]) / 1e8
         
         ratio = up / (up + down) if (up + down) > 0 else 0.5
         if ratio > 0.8: sent = "极度亢奋"
@@ -325,10 +386,25 @@ def _download_sentiment() -> dict:
         elif ratio > 0.35: sent = "偏冷"
         elif ratio > 0.2: sent = "冰点"
         else: sent = "恐慌"
-        
+
+        # 涨停家数 + 炸板率（从涨停池 limit_up.csv 算）
+        zt_count, zha_rate = 0, None
+        limit_path = os.path.join(DATA_ROOT, td, "limit_up.csv")
+        if os.path.exists(limit_path):
+            try:
+                limit_df = pd.read_csv(limit_path)
+                zt_count = len(limit_df)
+                if "炸板次数" in limit_df.columns:
+                    zha = int((limit_df["炸板次数"].fillna(0) > 0).sum())
+                    zha_rate = round(zha / len(limit_df) * 100, 1) if len(limit_df) else None
+            except Exception:
+                pass
+
         return {
             "up_count": up, "down_count": down, "flat_count": 0,
             "up_ratio": round(ratio * 100, 1),
+            "zt_count": zt_count,
+            "zha_rate": zha_rate,
             "total_amount": round(total_amt, 0),
             "sentiment": sent,
         }
@@ -374,6 +450,66 @@ def _download_stock_financial(code: str) -> dict:
     return {}
 
 
+def _download_stock_info(code: str) -> dict:
+    """下载公司概况（雪球/东方财富兜底）"""
+    info = {}
+    try:
+        import akshare as ak
+        # 东方财富个股信息
+        df = ak.stock_individual_info_em(symbol=code)
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                info[str(row.iloc[0])] = str(row.iloc[1]) if len(row) > 1 else ''
+    except Exception:
+        pass
+    if not info:
+        try:
+            # 雪球兜底
+            prefix = "SH" if code.startswith(("60","68")) else "SZ"
+            df = ak.stock_individual_basic_info_xq(symbol=f"{prefix}{code}")
+            if df is not None and not df.empty:
+                info = dict(zip(df.iloc[:,0].astype(str), df.iloc[:,1].astype(str)))
+        except Exception:
+            pass
+    return info
+
+def _download_stock_finabstract(code: str) -> pd.DataFrame:
+    """下载财务摘要（同花顺多报告期）"""
+    try:
+        import akshare as ak
+        df = ak.stock_financial_abstract_ths(symbol=code, indicator="按报告期")
+        return df if df is not None else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+def _download_stock_gdhs(code: str) -> pd.DataFrame:
+    """下载股东户数变动"""
+    try:
+        import akshare as ak
+        df = ak.stock_zh_a_gdhs_detail_em(symbol=code)
+        return df if df is not None else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+def _download_stock_fundflow(code: str) -> pd.DataFrame:
+    """下载个股资金流向"""
+    try:
+        import akshare as ak
+        mkt = "sh" if code.startswith(("60","68")) else "sz"
+        df = ak.stock_individual_fund_flow(stock=code, market=mkt)
+        return df if df is not None else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+def _download_stock_research(code: str) -> pd.DataFrame:
+    """下载机构研报"""
+    try:
+        import akshare as ak
+        df = ak.stock_research_report_em(symbol=code)
+        return df if df is not None else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
 def _download_limit_up() -> pd.DataFrame:
     """下载涨停板"""
     try:
@@ -383,9 +519,9 @@ def _download_limit_up() -> pd.DataFrame:
 
 
 def _download_lhb() -> pd.DataFrame:
-    """下载龙虎榜近30日（席位详情，便于本地筛选）"""
+    """下载龙虎榜近5日（席位详情，便于本地筛选）"""
     dfs = []
-    for i in range(30):
+    for i in range(5):  # 只取最近5天，避免卡顿
         date_str = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
         try:
             summary = ak.stock_lhb_detail_em(start_date=date_str, end_date=date_str)

@@ -12,11 +12,13 @@ import data_fetcher as df_
 import data_manager as dm
 import analyzer as anl
 import visualizer as viz
+from utils.ui import inject_css, conclusion
 import pandas as pd
 import numpy as np
 import streamlit.components.v1 as components
 
 st.set_page_config(page_title="持仓分析", page_icon="💼", layout="wide")
+inject_css()
 
 # ============================================================
 # 持仓管理（session_state + 本地json持久化）
@@ -25,20 +27,13 @@ st.set_page_config(page_title="持仓分析", page_icon="💼", layout="wide")
 PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "portfolio.json")
 
 def load_portfolio() -> dict:
-    """加载持仓：优先本地json → config.py"""
-    try:
-        if os.path.exists(PORTFOLIO_FILE):
-            with open(PORTFOLIO_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return dict(cfg.PORTFOLIO)
+    """加载持仓（统一走 data_manager，代码规范化）。"""
+    return dm.load_portfolio()
+
 
 def save_portfolio(data: dict):
-    """保存持仓到本地json"""
-    os.makedirs(os.path.dirname(PORTFOLIO_FILE), exist_ok=True)
-    with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """保存持仓（统一走 data_manager，代码规范化）。"""
+    dm.save_portfolio(data)
 
 def _add_from_dropdown():
     """下拉框选中回调：自动加入持仓"""
@@ -95,6 +90,7 @@ if search and len(search) >= 1 and stock_list is not None and not stock_list.emp
                 parts = sel.replace(chr(0x2014), '|').split('|')
                 c, n = parts[0].strip(), parts[1].strip()
                 st.session_state.portfolio[c] = n
+                save_portfolio(st.session_state.portfolio)  # 立即保存，其它页面/更新数据同步
                 st.rerun()
     else:
         st.caption("无匹配")
@@ -110,6 +106,7 @@ if st.session_state.portfolio:
                 del_code = code
     if del_code:
         del st.session_state.portfolio[del_code]
+        save_portfolio(st.session_state.portfolio)  # 立即保存，其它页面/更新数据同步
         st.rerun()
 
 st.divider()
@@ -128,59 +125,133 @@ selected_code = selected.split("(")[1].rstrip(")")
 selected_name = selected.split("(")[0]
 
 # ============================================================
-# 📄 生成HTML研报按钮
+# 📌 综合分析（K线+量价+资金+板块 → 短线/长线预测）
 # ============================================================
-col_btn1, col_btn2 = st.columns([1, 5])
+with st.spinner("综合分析中..."):
+    _kdf = df_.get_stock_kline(selected_code)
+    if not _kdf.empty:
+        _kdf = anl.calc_all_indicators(_kdf)
+        _fund = df_.get_stock_fund_factors(selected_code)
+        _sector_pct = None
+        try:
+            _src = df_._get_tushare()
+            _ts = selected_code + (".SH" if selected_code.startswith(("6", "9")) else ".SZ")
+            _sb = _src.pro.stock_basic(ts_code=_ts, fields="industry")
+            _ind = _sb["industry"].iloc[0] if _sb is not None and not _sb.empty else None
+            if _ind:
+                _sec = df_.get_sector_spot()
+                _row = _sec[_sec["sector_name"] == _ind]
+                if not _row.empty:
+                    _sector_pct = float(_row.iloc[0]["change_pct"])
+        except Exception:
+            pass
+        comp = anl.comprehensive_analysis(_kdf, _fund if not _fund.empty else None, _sector_pct)
+
+        if comp:
+            _sv = comp["short_verdict"]
+            _tone = "bull" if ("涨" in _sv or "强" in _sv) else ("bear" if ("跌" in _sv or "弱" in _sv) else "neutral")
+            conclusion(
+                f"短线 <b>{_sv}</b>（置信度 {comp['pred'].get('confidence', 0)}%）｜长线 <b>{comp['long_verdict']}</b>",
+                f"近5日 {comp['chg5']:+.1%}，近20日 {comp['chg20']:+.1%}｜{comp['sector_note']}｜量比 {comp['vol_ratio']:.2f}",
+                tone=_tone,
+            )
+            _pc, _nc = st.columns(2)
+            with _pc:
+                st.markdown("**🟢 利好**")
+                for x in (comp["positive"][:6] or ["无明显利好"]):
+                    st.caption(f"• {x}")
+            with _nc:
+                st.markdown("**🔴 利空/风险**")
+                for x in (comp["negative"][:6] or ["无明显利空"]):
+                    st.caption(f"• {x}")
+            st.divider()
+
+# ============================================================
+# 📄 生成HTML研报
+# ============================================================
+col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 6])
 with col_btn1:
-    if st.button("📄 生成HTML研报", type="primary", use_container_width=True):
-        with st.spinner(f"正在生成 {selected_name} 研报..."):
-            try:
-                import generate_report as gr
-                
-                rt = df_.get_stock_realtime(selected_code)
-                fin_data = df_.get_stock_financial(selected_code)
-                kdf = df_.get_stock_kline(selected_code, days=120)
-                
-                pred = {}
-                sr = {}
-                trend = {}
-                if not kdf.empty:
-                    kdf = anl.calc_all_indicators(kdf)
-                    pred = anl.predict_next_day(kdf)
-                    sr = anl.calc_stop_loss_take_profit(kdf, "中等")
-                    trend = anl.classify_trend(kdf)
-                
-                data = {
-                    'price': rt.get('price', 0) if rt else 0,
-                    'change_pct': rt.get('change_pct', 0) if rt else 0,
-                    'pe': rt.get('pe', 0) if rt else 0,
-                    'pb': rt.get('pb', 0) if rt else 0,
-                    'total_mv': rt.get('total_mv', 0) if rt else 0,
-                    'financial': fin_data or {},
-                    'prediction': pred,
-                    'stop_loss_take_profit': sr,
-                    'trend': trend,
-                }
-                
-                html = gr.generate_html_report(selected_code, selected_name, data)
-                filepath = gr.save_report(selected_code, selected_name, html)
-                
-                st.success(f"✅ 研报已生成！")
-                st.info(f"📁 文件：{filepath}")
-                
-                with open(filepath, "r", encoding="utf-8") as f:
-                    html_content = f.read()
+    generate_clicked = st.button("📄 生成HTML研报", type="primary", use_container_width=True)
+
+if generate_clicked:
+    with st.spinner(f"正在生成 {selected_name} 研报..."):
+        try:
+            import importlib, generate_report
+            importlib.reload(generate_report)
+            gr = generate_report
+            
+            rt = df_.get_stock_realtime(selected_code)
+            fin_data = df_.get_stock_financial(selected_code)
+            kdf = df_.get_stock_kline(selected_code, days=120)
+            zygc_df = df_.get_stock_zygc(selected_code)
+            gd_df = df_.get_stock_top10(selected_code)
+            fh_df = df_.get_stock_dividend(selected_code)
+            # 新增数据源（对标 stock-analysis）
+            info_df = dm.load_local(f'stock_{selected_code}_info.json')  # 公司概况
+            finabs_df = dm.load_local(f'stock_{selected_code}_finabs.csv')  # 财务摘要
+            gdhs_df = dm.load_local(f'stock_{selected_code}_gdhs.csv')  # 股东户数
+            
+            pred = {}
+            sr = {}
+            trend = {}
+            if not kdf.empty:
+                kdf = anl.calc_all_indicators(kdf)
+                pred = anl.predict_next_day(kdf)
+                sr = anl.calc_stop_loss_take_profit(kdf, "中等")
+                trend = anl.classify_trend(kdf)
+            
+            data = {
+                'price': (rt.get('price') or 0) if rt else 0,
+                'change_pct': (rt.get('change_pct') or 0) if rt else 0,
+                'pe': (rt.get('pe') or 0) if rt else 0,
+                'pb': (rt.get('pb') or 0) if rt else 0,
+                'total_mv': (rt.get('total_mv') or 0) if rt else 0,
+                'financial': fin_data or {},
+                'prediction': pred,
+                'stop_loss_take_profit': sr,
+                'trend': trend,
+                'kline': kdf,
+                'zygc': zygc_df if not zygc_df.empty else None,
+                'holders': gd_df if not gd_df.empty else None,
+                'dividend': fh_df if not fh_df.empty else None,
+                'basic_info': info_df if info_df and isinstance(info_df, dict) and info_df else None,
+                'fin_abstract': finabs_df if finabs_df is not None and not (hasattr(finabs_df,'empty') and finabs_df.empty) else None,
+                'gdhs': gdhs_df if gdhs_df is not None and not (hasattr(gdhs_df,'empty') and gdhs_df.empty) else None,
+            }
+            
+            # 先跑数据采集（生成JSON）
+            json_path = f"output/data_{selected_code}.json"
+            import subprocess, sys
+            subprocess.run([sys.executable, "stock_data_collect.py", selected_code], 
+                         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         timeout=120)
+            # 用JSON生成报告
+            html = gr.generate_report(selected_code, selected_name, json_path)
+            filepath = gr.save_report(selected_code, selected_name, html)
+            
+            st.success(f"✅ 研报已生成 | 📁 {filepath}")
+            
+            with open(filepath, "r", encoding="utf-8") as f:
+                html_content = f.read()
+            
+            col_dl, col_link = st.columns([2, 2])
+            with col_dl:
                 st.download_button(
                     label="📥 下载HTML研报",
                     data=html_content,
                     file_name=f"个股研究-{selected_name}.html",
                     mime="text/html",
+                    use_container_width=True,
                 )
-            except Exception as e:
-                st.error(f"生成失败：{e}")
+            with col_link:
+                import webbrowser
+                webbrowser.open(f"file:///{filepath.replace(chr(92), '/')}")
+                st.link_button("🔗 新标签页打开", url=f"file:///{filepath.replace(chr(92), '/')}", use_container_width=True)
+        except Exception as e:
+            st.error(f"生成失败：{e}")
 
-with col_btn2:
-    st.caption("生成完整的HTML深度研报，可直接在浏览器打开")
+with col_btn3:
+    st.caption("生成完整的HTML深度研报，可在浏览器打开")
 
 st.divider()
 
@@ -306,6 +377,10 @@ with st.spinner("正在获取基本面数据..."):
     fin_data = df_.get_stock_financial(selected_code)
 
 realtime = st.session_state.get("_realtime_cache", {}).get(selected_code, {})
+# 补估值数据（市值/PE/PB 从 Tushare daily_basic）
+_valuation = df_.get_stock_valuation(selected_code)
+if _valuation:
+    realtime = {**realtime, **_valuation}
 
 col_f1, col_f2, col_f3, col_f4 = st.columns(4)
 
