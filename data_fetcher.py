@@ -1111,6 +1111,8 @@ def get_stock_research(code: str) -> pd.DataFrame:
 def get_stock_news(code: str) -> pd.DataFrame:
     """获取个股新闻（新浪源）"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         # 尝试用新浪新闻接口
         df = ak.stock_news_sina(symbol=code)
@@ -1166,6 +1168,8 @@ def get_stock_dividend(code: str) -> pd.DataFrame:
 def get_stock_share_alloc(code: str) -> pd.DataFrame:
     """获取历史送转（Tushare dividend 的送转字段，稳定）。"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
@@ -1194,6 +1198,8 @@ def get_stock_share_alloc(code: str) -> pd.DataFrame:
 def get_stock_release(code: str) -> pd.DataFrame:
     """获取限售解禁（Tushare share_float，稳定）。"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return pd.DataFrame()
     try:
         src = _get_tushare()
         ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
@@ -1328,6 +1334,8 @@ def get_industry_leaders(top_n: int = 2) -> pd.DataFrame:
 def get_stock_valuation(code: str) -> dict:
     """个股估值数据（总市值/流通市值/PE/PB/换手率，Tushare daily_basic）。"""
     code = _fmt_code(code)
+    if not cfg.ALLOW_REALTIME_API:
+        return {}
     try:
         src = _get_tushare()
         ts_code = code + (".SH" if code.startswith(("6", "9")) else ".SZ")
