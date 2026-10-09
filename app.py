@@ -161,6 +161,21 @@ if st.sidebar.button("🔄 更新数据 & 重新分析", use_container_width=Tru
     # 个股深度数据（研报用）在「持仓分析」页按需采集，这里跳过，避免更新卡住
     # （stock_data_collect.py 逐只跑 subprocess，很慢，且非每日复盘必需）
 
+    # 顺便跑选股引擎（不推送；结果存 stock_choose/output，供选股决策页/定时推送使用）
+    try:
+        from stock_choose import main as stock_choose_main
+        sc_cfg = stock_choose_main.load_config("config.yaml")
+        sc_date = stock_choose_main.default_run_date()
+        if sc_date is None:
+            status_text.caption("今天休市，跳过选股引擎")
+        else:
+            progress_bar.progress(0.97, text=f"🎯 跑选股引擎（{sc_date}）...")
+            status_text.caption("选股引擎运行中：全市场数据 + 因子打分 + 信号 + 情绪仓位（约2-3分钟）")
+            stock_choose_main.run_daily_pipeline(sc_cfg, sc_date, push=False)
+            status_text.caption(f"✅ 选股完成：{sc_date}")
+    except Exception as e:
+        status_text.caption(f"选股引擎出错（不影响数据更新）：{type(e).__name__}: {e}")
+
     progress_bar.progress(1.0, text="✅ 全部完成，正在刷新...")
     progress_bar.empty()
     status_text.empty()

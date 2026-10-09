@@ -15,3 +15,6 @@ __pycache__/
 
 # Tushare token（本地文件，不提交）
 token.txt
+
+# 内嵌选股引擎配置（含 Tushare token / 推送密钥，本地文件不提交）
+stock_choose/config.yaml

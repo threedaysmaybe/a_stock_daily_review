@@ -32,61 +32,332 @@ tab_quant, tab_limit, tab_predict = st.tabs(["📊 量化选股", "🐉 涨停�
 # Tab 1: 量化选股（原 09 页）
 # ============================================================
 with tab_quant:
-    from data.tushare_provider import TushareProvider
-    from strategy.scoring import score_stocks
+    from stock_choose import main as stock_choose_main
+    from stock_choose import daily_verify as stock_choose_verify
 
-    def _filter_limit(df: pd.DataFrame) -> pd.DataFrame:
-        df = df[~df["is_st"].fillna(False).astype(bool)]
-        if "pct_change" in df.columns:
-            pct = pd.to_numeric(df["pct_change"], errors="coerce").fillna(0)
-            lim = np.where(df["code"].astype(str).str.startswith(("30", "68")), 20.0,
-                           np.where(df["code"].astype(str).str.startswith(("8", "4", "9")), 30.0, 10.0))
-            df = df[~((pct >= lim - 0.5))]
-        return df
+    ENGINE_OUT = os.path.join(os.path.dirname(stock_choose_main.__file__), "output")
 
     @st.cache_data(ttl=3600)
-    def run_pick(date_str: str):
-        provider = TushareProvider({}, cfg.TUSHARE_TOKEN)
-        df = provider.fetch(date_str)
-        if df is None or df.empty:
-            return None, None, 0
-        df = _filter_limit(df)
-        scored = score_stocks(df, cfg.STOCK_PICK_FACTORS, clip_q=0.01, method="zscore", min_coverage=0.5)
-        top = scored.head(cfg.STOCK_PICK_TOP_N).copy()
-        top.index.name = "code"
-        top = top.reset_index()
-        if "name" in df.columns:
-            top["name"] = top["code"].map(df["name"])
-        return top, df, len(scored)
+    def _get_engine_cfg() -> dict:
+        """加载内嵌引擎配置（stock_choose/config.yaml）。"""
+        return stock_choose_main.load_config("config.yaml")
 
-    st.subheader("📊 量化选股")
-    col_date, col_btn = st.columns([2, 1])
-    with col_date:
-        date_str = st.text_input("交易日（YYYY-MM-DD）", value=datetime.now().strftime("%Y-%m-%d"), key="quant_date")
-    with col_btn:
-        st.write("")
-        st.write("")
-        run = st.button("🔄 跑选股", type="primary", use_container_width=True, key="quant_run")
+    @st.cache_data(ttl=3600)
+    def _default_trade_date() -> str:
+        """与内嵌引擎一致：收盘后跑当天，否则上一交易日。"""
+        return stock_choose_main.default_run_date() or stock_choose_main.last_trading_day()
 
+    @st.cache_data(ttl=300)
+    def _load_latest_summary() -> dict:
+        import json as _json
+        p = os.path.join(ENGINE_OUT, "summary.json")
+        try:
+            with open(p, encoding="utf-8") as f:
+                return _json.load(f)
+        except Exception:
+            return {}
+
+    @st.cache_data(ttl=300)
+    def _load_latest_picks() -> pd.DataFrame:
+        import glob
+        files = sorted(glob.glob(os.path.join(ENGINE_OUT, "短期选股_*.xlsx")))
+        if not files:
+            return pd.DataFrame()
+        try:
+            return pd.read_excel(files[-1])
+        except Exception:
+            return pd.DataFrame()
+
+    # ---- 纯 HTML 日历（绿色=有结果，点日期通过 URL 参数回传） ----
+    @st.cache_data(ttl=3600)
+    def _trade_cal_set() -> set:
+        try:
+            import akshare as ak
+            return set(ak.tool_trade_date_hist_sina()["trade_date"].astype(str))
+        except Exception:
+            return set()
+
+    @st.cache_data(ttl=300)
+    def _result_date_set() -> set:
+        import glob
+        res = set()
+        for f in glob.glob(os.path.join(ENGINE_OUT, "短期选股_*.xlsx")):
+            stem = os.path.basename(f).replace("短期选股_", "").replace(".xlsx", "")
+            if len(stem) == 8 and stem.isdigit():
+                res.add(f"{stem[:4]}-{stem[4:6]}-{stem[6:]}")
+        return res
+
+    def _cal_html(year: int, month: int, selected: str) -> str:
+        """可点击日历（st.markdown 渲染，非 iframe）：绿色=有结果，点日期选中，◀▶ 切月。"""
+        import calendar as _cal
+        tds = _trade_cal_set()
+        res = _result_date_set()
+        prev_y, prev_m = (year, month - 1) if month > 1 else (year - 1, 12)
+        next_y, next_m = (year, month + 1) if month < 12 else (year + 1, 1)
+        total = _cal.monthrange(year, month)[1]
+        start_dow = datetime(year, month, 1).weekday()
+        today = datetime.now().strftime("%Y-%m-%d")
+        cells = []
+        for w in ["一", "二", "三", "四", "五", "六", "日"]:
+            cells.append(f'<div class="qcal-cell qcal-wh">{w}</div>')
+        for _ in range(start_dow):
+            cells.append('<div class="qcal-cell qcal-empty"></div>')
+        for d in range(1, total + 1):
+            ds = f"{year:04d}-{month:02d}-{d:02d}"
+            cls = "qcal-cell"
+            if ds in res:
+                cls += " qcal-green"
+            if ds not in tds:
+                cls += " qcal-ntd"
+            if ds == selected:
+                cls += " qcal-sel"
+            if ds == today:
+                cls += " qcal-today"
+            if ds in tds:
+                href = f"?quant_date={ds}&cal_y={year}&cal_m={month}"
+                cells.append(f'<a class="{cls}" href="{href}">{d}</a>')
+            else:
+                cells.append(f'<div class="{cls}">{d}</div>')
+        grid = "".join(cells)
+        return f'''
+<style>
+.qcal{{font-family:-apple-system,sans-serif;background:#0F172A;color:#F1F5F9;padding:8px;border-radius:10px;max-width:340px}}
+.qcal-head{{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}}
+.qcal-nav{{background:#1E293B;color:#F1F5F9;border:1px solid #334155;border-radius:8px;
+padding:5px 12px;font-size:13px;text-decoration:none;cursor:pointer}}
+.qcal-title{{font-weight:bold;font-size:14px}}
+.qcal-grid{{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}}
+.qcal-cell{{aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:6px;
+font-size:12px;border:1px solid #334155;color:#E2E8F0;text-decoration:none}}
+.qcal-wh{{background:#1E293B;font-weight:bold;color:#94A3B8}}
+.qcal-empty{{border:none}}
+.qcal-green{{background:#22c55e;color:#fff;border-color:#22c55e;font-weight:bold}}
+.qcal-ntd{{opacity:.35}}
+.qcal-sel{{outline:2px solid #1677ff}}
+.qcal-today{{font-weight:bold;border-color:#1677ff}}
+.qcal-label{{margin:8px 0 0;font-size:12px;color:#94A3B8}}
+</style>
+<div class="qcal">
+  <div class="qcal-head">
+    <a class="qcal-nav" href="?quant_date={selected}&cal_y={prev_y}&cal_m={prev_m}">◀</a>
+    <span class="qcal-title">{year}年{month}月</span>
+    <a class="qcal-nav" href="?quant_date={selected}&cal_y={next_y}&cal_m={next_m}">▶</a>
+  </div>
+  <div class="qcal-grid">{grid}</div>
+  <p class="qcal-label">绿色=已有结果；点日期即选中，◀▶ 切换月份</p>
+</div>'''
+
+    def _pick_cols(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or not len(df):
+            return pd.DataFrame()
+        cols = ["rank", "name", "code", "total_score", "signal_score", "final_score", "pos_tags", "risk_tags"]
+        out = df[[c for c in cols if c in df.columns]].copy()
+        out["code"] = out["code"].astype(str)
+        return out
+
+    def _render_sentiment(sent: dict):
+        level = sent.get("level", "未知")
+        advice = sent.get("advice", "")
+        up_ratio = sent.get("up_ratio")
+        if up_ratio is not None:
+            st.info(
+                f"市场情绪：**{level}**（上涨家数占比 {up_ratio:.1%}）→ {advice}"
+                + ("；⚠️ 外围风险 → 空仓" if sent.get("overseas_risk") else "")
+            )
+
+    def _render_picks(picks_df: pd.DataFrame):
+        if not len(picks_df):
+            st.warning("暂无选股结果（可能休市、空仓或全部被门槛过滤）。")
+            return
+        top1 = picks_df.iloc[0]
+        signal_part = f"{top1['signal_score']:+.2f}" if pd.notna(top1.get("signal_score")) else ""
+        conclusion(
+            f"今日首选：<b>{top1['name']}</b>（{top1['code'].split('.')[0]}）",
+            f"综合得分 <b>{top1['final_score']:.2f}</b>"
+            + (f"（因子分 {top1['total_score']:.2f}，信号分 {signal_part}）" if signal_part else "")
+            + f"，截面打分第 {int(top1['rank'])} 名。",
+            tone="bull",
+        )
+        show = picks_df.copy()
+        show["code"] = show["code"].str.split(".").str[0]
+        show.columns = ["排名", "名称", "代码", "因子分", "信号分", "综合得分", "看多标签", "风险标签"]
+        cyb_mask = show["代码"].str.startswith(("300", "301", "688"))
+        main_df, cyb_df = show[~cyb_mask], show[cyb_mask]
+        if len(main_df):
+            st.markdown(f"#### 主板（{len(main_df)} 只）")
+            st.dataframe(main_df, use_container_width=True, hide_index=True)
+        if len(cyb_df):
+            st.markdown(f"#### 创业板 / 科创板（{len(cyb_df)} 只）")
+            st.dataframe(cyb_df, use_container_width=True, hide_index=True)
+        st.caption("内嵌 stock_choose 引擎：6 因子加权 + 信号加减分 + 情绪仓位截断（含自进化权重/因子池）")
+
+    def _render_thresholds():
+        st.markdown("#### 🌍 明日参考阈值")
+        st.markdown(
+            "| 市场 | 触发建议别买 |\n"
+            "|------|------|\n"
+            "| 美股收盘 | 跌超 2% |\n"
+            "| 韩国开盘 | 跌超 2% |\n"
+            "| 日经开盘 | 跌超 2% |"
+        )
+
+    def _render_verify(verify: dict, market_avg):
+        if not verify:
+            st.info("暂无昨日选股验证（首次运行或昨日无选股结果）。")
+            return
+        win = verify.get("win_rate", 0)
+        n = verify.get("n", 0)
+        up = int(win * n)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("胜率", f"{win:.0%}（{up}/{n} 上涨）")
+        c2.metric("组合涨幅", f"{verify.get('avg_ret', 0):+.2%}")
+        if market_avg is not None:
+            c3.metric("大盘涨幅", f"{market_avg:+.2%}")
+            c4.metric("超额", f"{verify.get('avg_ret', 0) - market_avg:+.2%}")
+        chart = stock_choose_verify.format_winrate_chart(stock_choose_verify.load_verify_records())
+        if chart and chart != "（暂无胜率记录）":
+            with st.expander("📈 近15日胜率曲线"):
+                st.code(chart)
+
+    def _render_watchlist():
+        wl = stock_choose_verify.load_watchlist()
+        if len(wl):
+            wl = wl[wl["移除日期"].fillna("").astype(str).str.strip().eq("")]
+        if not len(wl):
+            st.info("股票池为空（暂无持仓关注）。")
+            return
+        wl = wl.copy()
+        wl["code_short"] = wl["code"].astype(str).str.split(".").str[0]
+        cyb_mask = wl["code"].astype(str).str.startswith(("300", "301", "688"))
+        st.markdown("#### 💼 股票池")
+        for title, sub in (("主板", wl[~cyb_mask]), ("创业板/科创板", wl[cyb_mask])):
+            if not len(sub):
+                continue
+            st.markdown(f"**{title}（{len(sub)} 只）**")
+            show = sub[["name", "code_short", "加入日期"]].copy()
+            show.columns = ["名称", "代码", "加入日期"]
+            st.dataframe(show, use_container_width=True, hide_index=True)
+
+    def _render_health(health: str):
+        if health:
+            st.markdown("#### 🧬 因子健康度（方向×IC）")
+            st.markdown(health)
+
+    def _render_report(picks_df: pd.DataFrame, sent: dict, verify: dict, market_avg, health: str):
+        _render_sentiment(sent)
+        _render_picks(picks_df)
+        _render_thresholds()
+        st.markdown("#### 📋 昨日选股表现")
+        _render_verify(verify, market_avg)
+        _render_watchlist()
+        _render_health(health)
+
+    st.subheader("📊 量化选股（内嵌 stock_choose 引擎）")
+    _default_str = _default_trade_date()
+    _default_d = datetime.strptime(_default_str, "%Y-%m-%d").date()
+
+    if "quant_date" not in st.session_state:
+        st.session_state["quant_date"] = _default_str
+    if "cal_view" not in st.session_state:
+        st.session_state["cal_view"] = (_default_d.year, _default_d.month)
+
+    date_str = st.session_state["quant_date"]
+    _cv_y, _cv_m = st.session_state["cal_view"]
+    tds = _trade_cal_set()
+    res = _result_date_set()
+
+    # ---- 按钮日历：原地刷新，不开新窗口 ----
+    import calendar as _cal
+    _b1, _b2, _b3 = st.columns([1, 2, 1])
+    with _b1:
+        if st.button("◀ 上月", key="cal_prev", use_container_width=True):
+            _cv_m -= 1
+            if _cv_m < 1:
+                _cv_m = 12
+                _cv_y -= 1
+            st.session_state["cal_view"] = (_cv_y, _cv_m)
+            st.rerun()
+    with _b2:
+        st.markdown(f"<div style='text-align:center;padding-top:8px'><b>{_cv_y}年{_cv_m}月</b></div>", unsafe_allow_html=True)
+    with _b3:
+        if st.button("下月 ▶", key="cal_next", use_container_width=True):
+            _cv_m += 1
+            if _cv_m > 12:
+                _cv_m = 1
+                _cv_y += 1
+            st.session_state["cal_view"] = (_cv_y, _cv_m)
+            st.rerun()
+
+    _total = _cal.monthrange(_cv_y, _cv_m)[1]
+    _start_dow = datetime(_cv_y, _cv_m, 1).weekday()
+
+    _hcols = st.columns(7)
+    for _i, _w in enumerate(["一", "二", "三", "四", "五", "六", "日"]):
+        _hcols[_i].markdown(
+            f"<div style='text-align:center;color:#94A3B8;font-size:12px'>{_w}</div>",
+            unsafe_allow_html=True,
+        )
+
+    _dcols = st.columns(7)
+    for _d in range(1, _total + 1):
+        _idx = (_start_dow + _d - 1) % 7
+        _ds = f"{_cv_y:04d}-{_cv_m:02d}-{_d:02d}"
+        _has = _ds in res
+        _is_td = _ds in tds
+        _is_sel = (_ds == date_str)
+        _label = ("🟢" if _has else "") + str(_d)
+        with _dcols[_idx]:
+            if _is_td:
+                if st.button(
+                    _label,
+                    key=f"cal_day_{_ds}",
+                    use_container_width=True,
+                    type="primary" if _is_sel else "secondary",
+                ):
+                    st.session_state["quant_date"] = _ds
+                    st.rerun()
+            else:
+                st.button(str(_d), key=f"cal_day_{_ds}", use_container_width=True, disabled=True)
+
+    st.caption(f"📅 已选数据日期：**{date_str}**（🟢=有结果；点日期原地切换）")
+    run = st.button("🔄 跑选股", type="primary", use_container_width=True, key="quant_run")
+
+    live = None
     if run:
-        with st.spinner("拉取全市场数据 + 多因子打分..."):
+        with st.spinner("内嵌引擎运行中：全市场数据 + 因子打分 + 信号加减分 + 情绪仓位 + 验证/股票池..."):
             try:
-                top, df, n = run_pick(date_str.strip())
-                if top is None:
-                    st.warning("该日期无数据（可能休市）。请确认是交易日。")
-                else:
-                    st.success(f"全市场 {n} 只参与打分，选出 Top {len(top)}")
-                    _top1 = top.iloc[0]
-                    conclusion(f"今日首选：<b>{_top1['name']}</b>（{_top1['code']}）",
-                               f"综合得分 <b>{_top1['total_score']:.2f}</b>，从全市场 {n} 只中排名第 1。",
-                               tone="bull")
-                    show = top[["rank", "name", "code", "total_score"]].copy()
-                    show["code"] = show["code"].astype(str).str.split(".").str[0]
-                    show.columns = ["排名", "名称", "代码", "得分"]
-                    st.dataframe(show, use_container_width=True, hide_index=True)
-                    st.caption("因子：换手率 / 量比 / 流通市值 / 主力净流入 / 20日动量 / 乖离率")
+                sc_cfg = _get_engine_cfg()
+                live = stock_choose_main.run_daily_pipeline(sc_cfg, date_str.strip(), push=False)
             except Exception as e:  # noqa: BLE001
-                st.error(f"选股失败：{e}")
+                st.error(f"选股失败：{type(e).__name__}: {e}")
+        if live:
+            _load_latest_summary.clear()
+            _load_latest_picks.clear()
+            _result_date_set.clear()
+            st.success(f"引擎完成：数据日期 {live['date']}")
+
+    if live:
+        _render_report(
+            _pick_cols(live.get("top")),
+            live.get("sentiment") or {},
+            live.get("verify"),
+            live.get("market_avg"),
+            live.get("health") or "",
+        )
+    else:
+        summary = _load_latest_summary()
+        picks = _pick_cols(_load_latest_picks())
+        if summary or len(picks):
+            st.caption(f"📂 显示最近一次引擎结果：{summary.get('date', '')}（点「🔄 跑选股」实时刷新）")
+            _render_report(
+                picks,
+                summary.get("sentiment") or {},
+                summary.get("verify"),
+                summary.get("market_avg"),
+                summary.get("health") or "",
+            )
+        else:
+            st.info("暂无选股结果。点「🔄 跑选股」运行内嵌引擎（约2-3分钟）。")
 
 
 # ============================================================
