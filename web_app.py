@@ -71,6 +71,48 @@ def _latest_result():
     return date, df
 
 
+def _picks_for_date(date_str: str):
+    """读取指定日期的选股结果（date_str 支持 YYYY-MM-DD 或 YYYYMMDD）。"""
+    ds = str(date_str).replace("-", "")
+    p = os.path.join(SC_OUT, f"短期选股_{ds}.xlsx")
+    if not os.path.exists(p):
+        return pd.DataFrame()
+    try:
+        return pd.read_excel(p)
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame()
+
+
+def _verify_for_date(date_str: str):
+    """从 验证记录.csv 读取该日验证结果（验证的是前一日的选股）。返回 (verify, market_avg)。"""
+    p = os.path.join(SC_OUT, "验证记录.csv")
+    if not os.path.exists(p):
+        return None, None
+    try:
+        recs = pd.read_csv(p)
+    except Exception:  # noqa: BLE001
+        return None, None
+    row = recs[recs["日期"].astype(str).str.strip() == str(date_str)]
+    if not len(row):
+        return None, None
+    r = row.iloc[0]
+
+    def _f(v):
+        try:
+            return float(v)
+        except Exception:  # noqa: BLE001
+            return None
+
+    verify = {
+        "prev_date": str(r.get("前日", "")),
+        "win_rate": _f(r.get("胜率")) or 0.0,
+        "n": int(_f(r.get("总数")) or 0),
+        "avg_ret": _f(r.get("组合涨幅")) or 0.0,
+    }
+    market_avg = _f(r.get("大盘涨幅"))
+    return verify, market_avg
+
+
 def _short(s, n=3):
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return ""
@@ -122,16 +164,20 @@ def _render_sentiment(sentiment):
     return html
 
 
-def _render_verify(verify):
+def _render_verify(verify, market_avg=None):
     if not verify:
         return ""
-    win = verify.get("win_rate", 0)
-    up = int(win * verify.get("n", 0))
+    win = verify.get("win_rate", 0) or 0
+    up = int(win * (verify.get("n", 0) or 0))
+    avg = verify.get("avg_ret", 0) or 0
+    mkt = market_avg
+    excess = (avg - mkt) if mkt is not None else None
+    mkt_s = f"{mkt:+.2%}" if mkt is not None else "N/A"
+    excess_s = f"{excess:+.2%}" if excess is not None else "N/A"
     return (f"<div class='box'><h2>昨日({verify.get('prev_date','')})选股表现</h2>"
             f"<table><tr><th>胜率</th><th>上涨数</th><th>总数</th><th>组合</th><th>大盘</th><th>超额</th></tr>"
             f"<tr><td>{win:.0%}</td><td>{up}</td><td>{verify.get('n','')}</td>"
-            f"<td>{verify.get('avg_ret',0):+.2%}</td><td>{verify.get('market_avg',0):+.2%}</td>"
-            f"<td>{verify.get('excess',0):+.2%}</td></tr></table></div>")
+            f"<td>{avg:+.2%}</td><td>{mkt_s}</td><td>{excess_s}</td></tr></table></div>")
 
 
 def _render_watchlist():
@@ -215,16 +261,29 @@ def calendar():
 @app.route("/")
 def index():
     summary = _load_summary()
-    sentiment = summary.get("sentiment", {})
+    latest_date, latest_df = _latest_result()
+
+    # 日历选中日期（YYYY-MM-DD）；未选则默认显示最新结果
+    sel = (request.args.get("quant_date") or "").strip()
+    if sel:
+        df = _picks_for_date(sel)
+        title_date = sel
+    else:
+        df = latest_df
+        title_date = (f"{latest_date[:4]}-{latest_date[4:6]}-{latest_date[6:]}"
+                      if latest_date else "")
+        sel = title_date
+
+    # 情绪只保存最近一次运行（summary.json），只有切到最近那次才显示
+    sentiment = summary.get("sentiment", {}) if summary.get("date") == sel else {}
     health = summary.get("health", "")
-    verify = summary.get("verify", {})
-    date, df = _latest_result()
+    verify, market_avg = _verify_for_date(sel) if sel else (None, None)
 
     picks_html = ""
     if df is not None and len(df):
         main_rows = _render_picks_table(df, is_cyb=False)
         cyb_rows = _render_picks_table(df, is_cyb=True)
-        picks_html = "<div class='box'><h2>今日精选</h2>"
+        picks_html = f"<div class='box'><h2>{title_date} 精选</h2>"
         if main_rows:
             picks_html += ("<h3>主板</h3><table><tr><th>排名</th><th>名称</th><th>代码</th>"
                            "<th>得分</th><th>看多</th><th>风险</th></tr>" + main_rows + "</table>")
@@ -233,12 +292,13 @@ def index():
                            "<th>得分</th><th>看多</th><th>风险</th></tr>" + cyb_rows + "</table>")
         picks_html += "</div>"
     else:
-        picks_html = "<div class='box'><h2>今日精选</h2><p>暂无结果，点上面按钮跑一次</p></div>"
+        picks_html = f"<div class='box'><h2>{title_date} 精选</h2><p>该日期暂无选股结果，点上面按钮跑一次</p></div>"
 
-    html = _HTML.replace("{{date}}", date or "-")
+    html = _HTML.replace("{{date}}", title_date or "-")
+    html = html.replace("{{sel}}", sel)
     html = html.replace("{{sentiment}}", _render_sentiment(sentiment))
     html = html.replace("{{picks}}", picks_html)
-    html = html.replace("{{verify}}", _render_verify(verify))
+    html = html.replace("{{verify}}", _render_verify(verify, market_avg))
     html = html.replace("{{watchlist}}", _render_watchlist())
     html = html.replace("{{health}}", _render_health(health))
     return html
@@ -318,7 +378,8 @@ details.box[open] summary{margin-bottom:4px}
 <script>
 let calYear = new Date().getFullYear();
 let calMonth = new Date().getMonth() + 1;
-let selectedDate = '';
+let selectedDate = '{{sel}}';
+if(selectedDate){ calYear=parseInt(selectedDate.slice(0,4)); calMonth=parseInt(selectedDate.slice(5,7)); }
 
 function prevMonth(){calMonth--;if(calMonth<1){calMonth=12;calYear--;}renderCal();}
 function nextMonth(){calMonth++;if(calMonth>12){calMonth=1;calYear++;}renderCal();}
@@ -343,6 +404,7 @@ function renderCal(){
     });
     html+='</div>';
     box.innerHTML=html;
+    if(selectedDate){ document.getElementById('selLabel').textContent='已选择：'+selectedDate+'（点「跑选股」将跑这一天）'; }
   });
 }
 function selectDate(ds){

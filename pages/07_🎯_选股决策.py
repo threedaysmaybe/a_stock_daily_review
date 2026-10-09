@@ -87,13 +87,48 @@ with tab_quant:
                 res.add(f"{stem[:4]}-{stem[4:6]}-{stem[6:]}")
         return res
 
-    def _cal_html(year: int, month: int, selected: str) -> str:
-        """可点击日历（st.markdown 渲染，非 iframe）：绿色=有结果，点日期选中，◀▶ 切月。"""
+    @st.cache_data(ttl=300)
+    def _load_picks_for(date_str: str) -> pd.DataFrame:
+        p = os.path.join(ENGINE_OUT, f"短期选股_{date_str.replace('-', '')}.xlsx")
+        if not os.path.exists(p):
+            return pd.DataFrame()
+        try:
+            return pd.read_excel(p)
+        except Exception:
+            return pd.DataFrame()
+
+    def _verify_for(date_str: str):
+        """从 验证记录.csv 读取该日的验证结果（验证的是前一日的选股）。"""
+        recs = stock_choose_verify.load_verify_records()
+        if recs is None or not len(recs):
+            return None, None
+        row = recs[recs["日期"].astype(str).str.strip() == date_str]
+        if not len(row):
+            return None, None
+        r = row.iloc[0]
+
+        def _f(v):
+            try:
+                return float(v)
+            except Exception:
+                return None
+
+        verify = {
+            "prev_date": str(r.get("前日", "")),
+            "win_rate": _f(r.get("胜率")) or 0.0,
+            "n": int(_f(r.get("总数")) or 0),
+            "avg_ret": _f(r.get("组合涨幅")) or 0.0,
+        }
+        market_avg = _f(r.get("大盘涨幅"))
+        return verify, market_avg
+
+    def _green_cal_html(selected: str) -> str:
+        """只读绿色日历：展示 selected 所在月份，带正确空位，绿色=有结果。"""
         import calendar as _cal
         tds = _trade_cal_set()
         res = _result_date_set()
-        prev_y, prev_m = (year, month - 1) if month > 1 else (year - 1, 12)
-        next_y, next_m = (year, month + 1) if month < 12 else (year + 1, 1)
+        _sd = datetime.strptime(selected, "%Y-%m-%d")
+        year, month = _sd.year, _sd.month
         total = _cal.monthrange(year, month)[1]
         start_dow = datetime(year, month, 1).weekday()
         today = datetime.now().strftime("%Y-%m-%d")
@@ -113,22 +148,15 @@ with tab_quant:
                 cls += " qcal-sel"
             if ds == today:
                 cls += " qcal-today"
-            if ds in tds:
-                href = f"?quant_date={ds}&cal_y={year}&cal_m={month}"
-                cells.append(f'<a class="{cls}" href="{href}">{d}</a>')
-            else:
-                cells.append(f'<div class="{cls}">{d}</div>')
+            cells.append(f'<div class="{cls}">{d}</div>')
         grid = "".join(cells)
         return f'''
 <style>
 .qcal{{font-family:-apple-system,sans-serif;background:#0F172A;color:#F1F5F9;padding:8px;border-radius:10px;max-width:340px}}
-.qcal-head{{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}}
-.qcal-nav{{background:#1E293B;color:#F1F5F9;border:1px solid #334155;border-radius:8px;
-padding:5px 12px;font-size:13px;text-decoration:none;cursor:pointer}}
-.qcal-title{{font-weight:bold;font-size:14px}}
+.qcal-title{{font-weight:bold;font-size:14px;display:block;margin-bottom:6px}}
 .qcal-grid{{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}}
 .qcal-cell{{aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:6px;
-font-size:12px;border:1px solid #334155;color:#E2E8F0;text-decoration:none}}
+font-size:12px;border:1px solid #334155;color:#E2E8F0}}
 .qcal-wh{{background:#1E293B;font-weight:bold;color:#94A3B8}}
 .qcal-empty{{border:none}}
 .qcal-green{{background:#22c55e;color:#fff;border-color:#22c55e;font-weight:bold}}
@@ -138,13 +166,9 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0;text-decoration:none}}
 .qcal-label{{margin:8px 0 0;font-size:12px;color:#94A3B8}}
 </style>
 <div class="qcal">
-  <div class="qcal-head">
-    <a class="qcal-nav" href="?quant_date={selected}&cal_y={prev_y}&cal_m={prev_m}">◀</a>
-    <span class="qcal-title">{year}年{month}月</span>
-    <a class="qcal-nav" href="?quant_date={selected}&cal_y={next_y}&cal_m={next_m}">▶</a>
-  </div>
+  <span class="qcal-title">{year}年{month}月</span>
   <div class="qcal-grid">{grid}</div>
-  <p class="qcal-label">绿色=已有结果；点日期即选中，◀▶ 切换月份</p>
+  <p class="qcal-label">绿色=已有结果；日期选择用上方日期组件（切月/选日期都在那里）</p>
 </div>'''
 
     def _pick_cols(df: pd.DataFrame) -> pd.DataFrame:
@@ -172,7 +196,7 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0;text-decoration:none}}
         top1 = picks_df.iloc[0]
         signal_part = f"{top1['signal_score']:+.2f}" if pd.notna(top1.get("signal_score")) else ""
         conclusion(
-            f"今日首选：<b>{top1['name']}</b>（{top1['code'].split('.')[0]}）",
+            f"首选：<b>{top1['name']}</b>（{top1['code'].split('.')[0]}）",
             f"综合得分 <b>{top1['final_score']:.2f}</b>"
             + (f"（因子分 {top1['total_score']:.2f}，信号分 {signal_part}）" if signal_part else "")
             + f"，截面打分第 {int(top1['rank'])} 名。",
@@ -256,70 +280,11 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0;text-decoration:none}}
     _default_str = _default_trade_date()
     _default_d = datetime.strptime(_default_str, "%Y-%m-%d").date()
 
-    if "quant_date" not in st.session_state:
-        st.session_state["quant_date"] = _default_str
-    if "cal_view" not in st.session_state:
-        st.session_state["cal_view"] = (_default_d.year, _default_d.month)
+    _picked = st.date_input("数据日期（日历选择）", value=_default_d, key="quant_date")
+    date_str = (_picked.strftime("%Y-%m-%d") if _picked else _default_str)
 
-    date_str = st.session_state["quant_date"]
-    _cv_y, _cv_m = st.session_state["cal_view"]
-    tds = _trade_cal_set()
-    res = _result_date_set()
-
-    # ---- 按钮日历：原地刷新，不开新窗口 ----
-    import calendar as _cal
-    _b1, _b2, _b3 = st.columns([1, 2, 1])
-    with _b1:
-        if st.button("◀ 上月", key="cal_prev", use_container_width=True):
-            _cv_m -= 1
-            if _cv_m < 1:
-                _cv_m = 12
-                _cv_y -= 1
-            st.session_state["cal_view"] = (_cv_y, _cv_m)
-            st.rerun()
-    with _b2:
-        st.markdown(f"<div style='text-align:center;padding-top:8px'><b>{_cv_y}年{_cv_m}月</b></div>", unsafe_allow_html=True)
-    with _b3:
-        if st.button("下月 ▶", key="cal_next", use_container_width=True):
-            _cv_m += 1
-            if _cv_m > 12:
-                _cv_m = 1
-                _cv_y += 1
-            st.session_state["cal_view"] = (_cv_y, _cv_m)
-            st.rerun()
-
-    _total = _cal.monthrange(_cv_y, _cv_m)[1]
-    _start_dow = datetime(_cv_y, _cv_m, 1).weekday()
-
-    _hcols = st.columns(7)
-    for _i, _w in enumerate(["一", "二", "三", "四", "五", "六", "日"]):
-        _hcols[_i].markdown(
-            f"<div style='text-align:center;color:#94A3B8;font-size:12px'>{_w}</div>",
-            unsafe_allow_html=True,
-        )
-
-    _dcols = st.columns(7)
-    for _d in range(1, _total + 1):
-        _idx = (_start_dow + _d - 1) % 7
-        _ds = f"{_cv_y:04d}-{_cv_m:02d}-{_d:02d}"
-        _has = _ds in res
-        _is_td = _ds in tds
-        _is_sel = (_ds == date_str)
-        _label = ("🟢" if _has else "") + str(_d)
-        with _dcols[_idx]:
-            if _is_td:
-                if st.button(
-                    _label,
-                    key=f"cal_day_{_ds}",
-                    use_container_width=True,
-                    type="primary" if _is_sel else "secondary",
-                ):
-                    st.session_state["quant_date"] = _ds
-                    st.rerun()
-            else:
-                st.button(str(_d), key=f"cal_day_{_ds}", use_container_width=True, disabled=True)
-
-    st.caption(f"📅 已选数据日期：**{date_str}**（🟢=有结果；点日期原地切换）")
+    st.markdown(_green_cal_html(date_str), unsafe_allow_html=True)
+    st.caption(f"📅 已选数据日期：**{date_str}**（绿色=有结果，日历跟随所选月份）")
     run = st.button("🔄 跑选股", type="primary", use_container_width=True, key="quant_run")
 
     live = None
@@ -345,19 +310,17 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0;text-decoration:none}}
             live.get("health") or "",
         )
     else:
+        # 按所选日期展示：选股表/昨日表现从该日期文件读取；
+        # 情绪只保存最近一次（summary.json），其余全局数据（股票池/阈值/健康度）照常显示
         summary = _load_latest_summary()
-        picks = _pick_cols(_load_latest_picks())
-        if summary or len(picks):
-            st.caption(f"📂 显示最近一次引擎结果：{summary.get('date', '')}（点「🔄 跑选股」实时刷新）")
-            _render_report(
-                picks,
-                summary.get("sentiment") or {},
-                summary.get("verify"),
-                summary.get("market_avg"),
-                summary.get("health") or "",
-            )
-        else:
-            st.info("暂无选股结果。点「🔄 跑选股」运行内嵌引擎（约2-3分钟）。")
+        picks = _pick_cols(_load_picks_for(date_str))
+        sent = (summary.get("sentiment") or {}) if summary.get("date") == date_str else {}
+        verify, market_avg = _verify_for(date_str)
+        health = summary.get("health") or ""
+
+        if not len(picks):
+            st.warning(f"{date_str} 暂无选股结果（可能休市、未跑或全部被过滤）。点「🔄 跑选股」可生成该日结果。")
+        _render_report(picks, sent, verify, market_avg, health)
 
 
 # ============================================================
