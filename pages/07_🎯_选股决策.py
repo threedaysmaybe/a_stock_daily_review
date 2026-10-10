@@ -128,14 +128,32 @@ with tab_quant:
         else:
             cfg = {}
 
-        try:
-            cfg.setdefault("short_term", {})["tushare_token"] = st.secrets["stock_choose"]["tushare_token"]
-        except Exception:
-            pass
-        try:
-            cfg.setdefault("push", {})["sendkey"] = st.secrets["stock_choose"]["sendkey"]
-        except Exception:
-            pass
+        def _secret(*names):
+            for name in names:
+                try:
+                    node = st.secrets
+                    for part in name.split("."):
+                        node = node[part]
+                    if node:
+                        return node
+                except Exception:
+                    continue
+            return None
+
+        # 兼容写法 1：整个 config_yaml 作为 secret（老方式）
+        full_yaml = _secret("stock_choose.config_yaml", "config_yaml")
+        if full_yaml:
+            loaded = yaml.safe_load(full_yaml)
+            if isinstance(loaded, dict):
+                cfg = loaded
+
+        # 兼容写法 2：单独注入 token/sendkey（推荐方式）
+        tok = _secret("stock_choose.tushare_token", "tushare_token")
+        if tok:
+            cfg.setdefault("short_term", {})["tushare_token"] = tok
+        sendkey = _secret("stock_choose.sendkey", "sendkey")
+        if sendkey:
+            cfg.setdefault("push", {})["sendkey"] = sendkey
 
         if not cfg.get("short_term", {}).get("tushare_token"):
             raise FileNotFoundError(
