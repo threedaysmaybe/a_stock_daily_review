@@ -1,0 +1,163 @@
+short_term:
+  gates:
+    exclude_st: true
+    roe_min: 0
+    max_turnover: 0
+    min_market_cap: 0
+    max_market_cap: 0
+  masked_factors:
+  - sector_heat
+  tushare_token: ''
+  factors:
+    momentum_20d:
+      query: 20日涨跌幅
+      weight: 0.25
+      direction: 1
+    main_net_inflow:
+      query: 主力资金流向
+      weight: 0.25
+      direction: 1
+    volume_ratio:
+      query: 量比
+      weight: 0.2
+      direction: 1
+    turnover:
+      query: 换手率
+      weight: 0.15
+      direction: 1
+    float_market_cap:
+      query: 流通市值
+      weight: 0.15
+      direction: -1
+    ma_bias:
+      weight: 0.1
+      direction: 1
+    sector_heat:
+      weight: 0.15
+      direction: 1
+  candidate_factors:
+    amplitude:
+      query: 振幅
+      direction: -1
+    main_inflow_5d:
+      query: 5日主力资金流向
+      direction: 1
+    turnover_5d:
+      query: 5日换手率
+      direction: 1
+    total_market_cap:
+      query: 总市值
+      direction: -1
+    pe_ttm:
+      query: 市盈率
+      direction: -1
+    pb:
+      query: 市净率
+      direction: -1
+    dividend_yield:
+      query: 股息率
+      direction: 1
+    roe:
+      query: 净资产收益率
+      direction: 1
+    net_profit_growth:
+      query: 净利润同比增长率
+      direction: 1
+    revenue_growth:
+      query: 营业收入同比增长率
+      direction: 1
+    gross_margin:
+      query: 销售毛利率
+      direction: 1
+    debt_ratio:
+      query: 资产负债率
+      direction: -1
+  signal_weights:
+    涨停回调不破: -0.22
+    底部放量: 0.11
+    缩量回调: 0.1
+    均线多头: -0.11
+    放量上影线: -0.05
+    MACD金叉: -0.04
+    MACD死叉: 0.09
+    KDJ金叉: 0.02
+    KDJ超买: -0.25
+    KDJ超卖: 0.13
+    RSI超买: -0.3
+    RSI超卖: 0.2
+    BOLL站上中轨: -0.08
+    BOLL突破上轨: -0.29
+    超买乖离: -0.3
+    均线破位: 0.06
+    多方占优: 0.05
+    抛压过大: -0.15
+    尾盘诱多: -0.2
+    尾盘跳水: -0.2
+long_term:
+  factors:
+    pe_ttm:
+      query: 市盈率
+      weight: 0.15
+      direction: -1
+    pb:
+      query: 市净率
+      weight: 0.1
+      direction: -1
+    peg:
+      query: peg
+      weight: 0.08
+      direction: -1
+    dividend_yield:
+      query: 股息率
+      weight: 0.08
+      direction: 1
+    roe:
+      query: 净资产收益率
+      weight: 0.15
+      direction: 1
+    gross_margin:
+      query: 销售毛利率
+      weight: 0.08
+      direction: 1
+    net_margin:
+      query: 销售净利率
+      weight: 0.08
+      direction: 1
+    debt_ratio:
+      query: 资产负债率
+      weight: 0.06
+      direction: -1
+    revenue_growth:
+      query: 营业收入同比增长率
+      weight: 0.1
+      direction: 1
+    net_profit_growth:
+      query: 净利润同比增长率
+      weight: 0.1
+      direction: 1
+    float_market_cap:
+      query: 流通市值
+      weight: 0.04
+      direction: -1
+scoring:
+  top_n: 20
+  clip_quantile: 0.01
+  standardize: zscore
+  min_factor_coverage: 0.5
+  pattern_pool: 50
+  long_top_n: 20
+sentiment:
+  strong_up_ratio: 0.6
+  strong_top_score: 1.5
+  weak_up_ratio: 0.4
+  weak_top_score: 1.0
+push:
+  enable: true
+  sendkey: ''
+  title: 每日量化选股
+  long_title: 每周价值选股
+watchlist:
+  excess_base: 0.03
+  excess_tightest: 0.01
+  cumulative_drop: -0.08
+  weak_up_ratio: 0.4

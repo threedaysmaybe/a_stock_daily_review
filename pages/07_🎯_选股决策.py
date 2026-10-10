@@ -109,22 +109,40 @@ with tab_quant:
 
     @st.cache_data(ttl=3600)
     def _get_engine_cfg() -> dict:
-        """加载内嵌引擎配置：优先本地 stock_choose/config.yaml；
-        Streamlit Cloud 上从 secrets['stock_choose']['config_yaml'] 读取。"""
-        cfg_path = os.path.join(os.path.dirname(stock_choose_main.__file__), "config.yaml")
+        """加载内嵌引擎配置。
+
+        桌面端：直接用本地 stock_choose/config.yaml（含 token/sendkey）。
+        Cloud：加载 GitHub 提交的 config_public.yaml（权重/门槛等），
+        再从 Secrets 注入 tushare_token / sendkey 两个敏感字段。
+        """
+        import yaml
+        base_dir = os.path.dirname(stock_choose_main.__file__)
+        cfg_path = os.path.join(base_dir, "config.yaml")
         if os.path.exists(cfg_path):
             return stock_choose_main.load_config(cfg_path)
+
+        public_path = os.path.join(base_dir, "config_public.yaml")
+        if os.path.exists(public_path):
+            with open(public_path, encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+        else:
+            cfg = {}
+
         try:
-            import yaml
-            secret_cfg = st.secrets["stock_choose"]["config_yaml"]
+            cfg.setdefault("short_term", {})["tushare_token"] = st.secrets["stock_choose"]["tushare_token"]
         except Exception:
-            secret_cfg = ""
-        if secret_cfg:
-            return yaml.safe_load(secret_cfg)
-        raise FileNotFoundError(
-            "找不到选股引擎配置：本地无 stock_choose/config.yaml，"
-            "且 Streamlit Cloud 未配置 secrets['stock_choose']['config_yaml']"
-        )
+            pass
+        try:
+            cfg.setdefault("push", {})["sendkey"] = st.secrets["stock_choose"]["sendkey"]
+        except Exception:
+            pass
+
+        if not cfg.get("short_term", {}).get("tushare_token"):
+            raise FileNotFoundError(
+                "找不到选股引擎配置：Cloud 上需要配置 secrets['stock_choose']['tushare_token'] "
+                "（以及可选的 secrets['stock_choose']['sendkey']）"
+            )
+        return cfg
 
     @st.cache_data(ttl=3600)
     def _default_trade_date() -> str:

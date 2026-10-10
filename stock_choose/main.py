@@ -41,6 +41,25 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def save_config_public(cfg: dict):
+    """把配置去掉敏感字段（token/sendkey）后保存为 config_public.yaml。
+
+    该文件会提交到 GitHub：手机端加载公开配置 + 从 Secrets 注入密钥；
+    这样权重/门槛等改动会随桌面端每次跑完自动同步到手机，不写死在 Secrets。
+    """
+    try:
+        import copy
+        pub = copy.deepcopy(cfg)
+        if isinstance(pub.get("short_term"), dict):
+            pub["short_term"]["tushare_token"] = ""
+        if isinstance(pub.get("push"), dict):
+            pub["push"]["sendkey"] = ""
+        with open(os.path.join(BASE_DIR, "config_public.yaml"), "w", encoding="utf-8") as f:
+            yaml.safe_dump(pub, f, allow_unicode=True, sort_keys=False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def apply_gates(df, gates_cfg: dict):
     g = gates_cfg
     if g.get("exclude_st") and "is_st" in df.columns:
@@ -490,6 +509,9 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
     except Exception:  # noqa: BLE001
         pass
+
+    # 同步公开配置（去掉 token/sendkey），提交 GitHub 后手机端自动用新权重
+    save_config_public(cfg)
 
     return {
         "date": date,
