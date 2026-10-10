@@ -24,7 +24,7 @@ inject_css()
 def _load_hot_order() -> list:
     """加载已保存的游资顺序。"""
     try:
-        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "hot_money_order.json")
+        p = os.path.join(os.environ.get("SC_DATA_ROOT") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"), "hot_money_order.json")
         with open(p, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
@@ -34,7 +34,7 @@ def _load_hot_order() -> list:
 def _save_hot_order(order: list):
     """保存游资顺序。"""
     try:
-        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "hot_money_order.json")
+        p = os.path.join(os.environ.get("SC_DATA_ROOT") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"), "hot_money_order.json")
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             json.dump(order, f, ensure_ascii=False, indent=2)

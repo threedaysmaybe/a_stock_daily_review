@@ -24,6 +24,13 @@ from datetime import datetime
 # ============================================================
 # 导入自定义模块
 # ============================================================
+# 手机端（Cloud）：先同步 GitHub 上的最新原始数据，再导入 data_manager（它读 SC_DATA_ROOT）
+try:
+    import github_sync
+    github_sync.sync()
+except Exception:
+    pass
+
 import config as cfg
 import data_fetcher as df_
 import analyzer as anl

@@ -24,7 +24,7 @@ inject_css()
 # 持仓管理（session_state + 本地json持久化）
 # ============================================================
 
-PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "portfolio.json")
+PORTFOLIO_FILE = os.path.join(os.environ.get("SC_DATA_ROOT") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"), "portfolio.json")
 
 def load_portfolio() -> dict:
     """加载持仓（统一走 data_manager，代码规范化）。"""
@@ -51,7 +51,7 @@ st.title("💼 持仓股深度分析")
 st.caption(f"交易日：{(st.session_state.get('_trading_day') or pd.Timestamp.now()).strftime('%Y-%m-%d')}")
 
 # 预加载股票列表（来自本地CSV，一键下载时已保存。首次使用点侧边栏下载）
-STOCK_LIST_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "stock_list.csv")
+STOCK_LIST_FILE = os.path.join(os.environ.get("SC_DATA_ROOT") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"), "stock_list.csv")
 stock_list = None
 if os.path.exists(STOCK_LIST_FILE):
     stock_list = pd.read_csv(STOCK_LIST_FILE, dtype={"code": str, "name": str})

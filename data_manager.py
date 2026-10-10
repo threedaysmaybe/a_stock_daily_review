@@ -13,8 +13,9 @@ import streamlit as st
 
 import config as cfg
 
-# 本地数据目录
-DATA_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# 本地数据目录（手机端 Cloud 通过 SC_DATA_ROOT 指向 GitHub 同步下来的临时目录）
+import data_paths as _dp
+DATA_ROOT = _dp.data_dir()
 
 
 def _load_portfolio() -> dict:

@@ -601,7 +601,7 @@ def _load_thresholds() -> dict:
     """读回测阈值（data/thresholds.json），供 technical_verdict 用；不存在则返回空。"""
     try:
         import json as _json
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "thresholds.json")
+        p = os.path.join(os.environ.get("SC_DATA_ROOT") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"), "thresholds.json")
         with open(p, "r", encoding="utf-8") as f:
             return _json.load(f).get("signals", {})
     except Exception:

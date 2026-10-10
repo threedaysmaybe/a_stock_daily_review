@@ -37,7 +37,7 @@ concept_df = df_.get_concept_spot()
 # ============================================================
 def get_history_data(data_type="sector", days=10):
     """获取历史板块数据（返回所有可用日期，日期取自K线真实交易日）"""
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+    data_dir = os.environ.get("SC_DATA_ROOT") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
     history_data = []
     seen_dates = set()  # 去重：同一交易日只保留最新一次下载
     
