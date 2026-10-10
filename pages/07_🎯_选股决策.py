@@ -37,6 +37,61 @@ with tab_quant:
 
     ENGINE_OUT = os.path.join(os.path.dirname(stock_choose_main.__file__), "output")
 
+    # ---- 手机端（Cloud）数据源：GitHub 上的最新数据 ----
+    _GH_BASE = "https://raw.githubusercontent.com/threedaysmaybe/a_stock_daily_review/main/stock_choose/output"
+    _GH_FILES = ["manifest.json", "summary.json", "验证记录.csv", "股票池.csv",
+                 "trade_calendar.txt", "ic_history.csv", "finance_cache.csv"]
+
+    def _is_cloud() -> bool:
+        # Cloud 上没有本地 config.yaml（gitignore 未提交）；桌面端有
+        return not os.path.exists(os.path.join(os.path.dirname(stock_choose_main.__file__), "config.yaml"))
+
+    @st.cache_data(ttl=600)
+    def _gh_manifest() -> dict:
+        try:
+            import urllib.request
+            with urllib.request.urlopen(_GH_BASE + "/manifest.json", timeout=10) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception:
+            return {}
+
+    @st.cache_data(ttl=600)
+    def _gh_download(name: str, dest: str) -> bool:
+        try:
+            import urllib.request
+            from urllib.parse import quote
+            url = _GH_BASE + "/" + quote(name)
+            with urllib.request.urlopen(url, timeout=25) as r:
+                data = r.read()
+            os.makedirs(dest, exist_ok=True)
+            with open(os.path.join(dest, name), "wb") as f:
+                f.write(data)
+            return True
+        except Exception:
+            return False
+
+    def _try_github_refresh(expected_date: str) -> str | None:
+        """GitHub 数据已更新到预期交易日 → 下载到临时目录并返回路径；否则返回 None。"""
+        if not expected_date or _gh_manifest().get("result_date") != expected_date:
+            return None
+        import tempfile
+        dest = os.path.join(tempfile.gettempdir(), "sc_github_out")
+        for name in _GH_FILES + [f"短期选股_{expected_date.replace('-', '')}.xlsx"]:
+            _gh_download(name, dest)
+        if os.path.exists(os.path.join(dest, "summary.json")) and \
+           os.path.exists(os.path.join(dest, f"短期选股_{expected_date.replace('-', '')}.xlsx")):
+            return dest
+        return None
+
+    def _load_verify_records() -> pd.DataFrame:
+        p = os.path.join(ENGINE_OUT, "验证记录.csv")
+        if not os.path.exists(p):
+            return pd.DataFrame()
+        try:
+            return pd.read_csv(p)
+        except Exception:
+            return pd.DataFrame()
+
     @st.cache_data(ttl=3600)
     def _get_engine_cfg() -> dict:
         """加载内嵌引擎配置：优先本地 stock_choose/config.yaml；
@@ -113,7 +168,7 @@ with tab_quant:
 
     def _verify_for(date_str: str):
         """从 验证记录.csv 读取该日的验证结果（验证的是前一日的选股）。"""
-        recs = stock_choose_verify.load_verify_records()
+        recs = _load_verify_records()
         if recs is None or not len(recs):
             return None, None
         row = recs[recs["日期"].astype(str).str.strip() == date_str]
@@ -252,13 +307,21 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
         if market_avg is not None:
             c3.metric("大盘涨幅", f"{market_avg:+.2%}")
             c4.metric("超额", f"{verify.get('avg_ret', 0) - market_avg:+.2%}")
-        chart = stock_choose_verify.format_winrate_chart(stock_choose_verify.load_verify_records())
+        chart = stock_choose_verify.format_winrate_chart(_load_verify_records())
         if chart and chart != "（暂无胜率记录）":
             with st.expander("📈 近15日胜率曲线"):
                 st.code(chart)
 
     def _render_watchlist():
-        wl = stock_choose_verify.load_watchlist()
+        p = os.path.join(ENGINE_OUT, "股票池.csv")
+        if not os.path.exists(p):
+            st.info("股票池为空（暂无持仓关注）。")
+            return
+        try:
+            wl = pd.read_csv(p)
+        except Exception:
+            st.info("股票池为空（暂无持仓关注）。")
+            return
         if len(wl):
             wl = wl[wl["移除日期"].fillna("").astype(str).str.strip().eq("")]
         if not len(wl):
@@ -294,10 +357,26 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
     _default_str = _default_trade_date()
     _default_d = datetime.strptime(_default_str, "%Y-%m-%d").date()
 
+    # Cloud 手机端：先看 GitHub 上的数据是否已更新到预期交易日，是就直接下载加载
+    _data_hint = ""
+    if _is_cloud():
+        _expected = _default_trade_date()
+        _gh_dir = _try_github_refresh(_expected) if _expected else None
+        if _gh_dir and _gh_dir != ENGINE_OUT:
+            ENGINE_OUT = _gh_dir
+            _load_latest_summary.clear()
+            _load_latest_picks.clear()
+            _result_date_set.clear()
+            _load_picks_for.clear()
+        _data_hint = ("✅ 已加载 GitHub 最新数据" if ENGINE_OUT != os.path.join(os.path.dirname(stock_choose_main.__file__), "output")
+                      else "⚠️ GitHub 数据未更新到最新交易日；可点「🔄 跑选股」抓取")
+
     _picked = st.date_input("数据日期（日历选择）", value=_default_d, key="quant_date")
     date_str = (_picked.strftime("%Y-%m-%d") if _picked else _default_str)
 
     st.markdown(_green_cal_html(date_str), unsafe_allow_html=True)
+    if _data_hint:
+        st.caption(_data_hint)
     st.caption(f"📅 已选数据日期：**{date_str}**（绿色=有结果，日历跟随所选月份）")
     run = st.button("🔄 跑选股", type="primary", use_container_width=True, key="quant_run")
 

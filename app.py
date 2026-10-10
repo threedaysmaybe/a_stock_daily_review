@@ -173,6 +173,15 @@ if st.sidebar.button("🔄 更新数据 & 重新分析", use_container_width=Tru
             status_text.caption("选股引擎运行中：全市场数据 + 因子打分 + 信号 + 情绪仓位（约2-3分钟）")
             stock_choose_main.run_daily_pipeline(sc_cfg, sc_date, push=False)
             status_text.caption(f"✅ 选股完成：{sc_date}")
+            # 后台把选股结果推送到 GitHub（手机端从 GitHub 加载）
+            try:
+                import subprocess as _sp
+                _push_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "push_output.py")
+                if os.path.exists(_push_script):
+                    _sp.Popen([sys.executable, _push_script],
+                              stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            except Exception:
+                pass
     except Exception as e:
         status_text.caption(f"选股引擎出错（不影响数据更新）：{type(e).__name__}: {e}")
 

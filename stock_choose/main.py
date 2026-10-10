@@ -4,9 +4,10 @@
 长期表：估值/质量/成长因子加权
 """
 import argparse
+import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import yaml
@@ -20,6 +21,17 @@ from stock_choose.strategy import evolution, intraday, patterns, sector, oversea
 from stock_choose.strategy.scoring import score_stocks
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# A股按北京时间判断"收盘后/盘中"，与服务器时区无关
+try:
+    from zoneinfo import ZoneInfo
+    _TZ_CN = ZoneInfo("Asia/Shanghai")
+except Exception:  # noqa: BLE001
+    _TZ_CN = timezone(timedelta(hours=8))
+
+
+def now_cn() -> datetime:
+    return datetime.now(_TZ_CN)
 
 
 def load_config(path: str) -> dict:
@@ -268,22 +280,50 @@ def run_long(cfg: dict, date: str, push: bool = True):
 
 
 _trade_dates_cache: set | None = None
+_TRADE_CAL_FILE = os.path.join(BASE_DIR, "output", "trade_calendar.txt")
+
+
+def _load_trade_cal_file() -> set:
+    try:
+        with open(_TRADE_CAL_FILE, encoding="utf-8") as f:
+            return {ln.strip() for ln in f if ln.strip()}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _save_trade_cal_file(dates: set):
+    try:
+        os.makedirs(os.path.dirname(_TRADE_CAL_FILE), exist_ok=True)
+        with open(_TRADE_CAL_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(sorted(dates)))
+    except Exception:  # noqa: BLE001 —— Cloud 只读时静默失败
+        pass
 
 
 def _trade_dates() -> set:
-    """全市场交易日历（akshare，进程内缓存一次，避免重复请求拖慢页面）。"""
+    """全市场交易日历。
+
+    优先读本地缓存文件（桌面端抓一次能用一年，并提交到 GitHub 给手机用）；
+    缓存文件过期（今天不在覆盖范围内）才重新抓取 akshare。
+    """
     global _trade_dates_cache
     if _trade_dates_cache is None:
-        try:
-            import akshare as ak
-            _trade_dates_cache = set(ak.tool_trade_date_hist_sina()["trade_date"].astype(str))
-        except Exception:  # noqa: BLE001
-            _trade_dates_cache = set()
+        cached = _load_trade_cal_file()
+        today = now_cn().strftime("%Y-%m-%d")
+        if cached and min(cached) <= today <= max(cached):
+            _trade_dates_cache = cached
+        else:
+            try:
+                import akshare as ak
+                _trade_dates_cache = set(ak.tool_trade_date_hist_sina()["trade_date"].astype(str))
+                _save_trade_cal_file(_trade_dates_cache)
+            except Exception:  # noqa: BLE001
+                _trade_dates_cache = cached or set()
     return _trade_dates_cache
 
 
 def is_trading_day(date_str: str) -> bool:
-    """判断是否交易日：优先用 akshare 交易日历（含节假日），失败退回周末判断。"""
+    """判断是否交易日：优先用交易日历（含节假日），失败退回周末判断。"""
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     if dt.weekday() >= 5:  # 周六(5)/周日(6)
         return False
@@ -295,13 +335,12 @@ def is_trading_day(date_str: str) -> bool:
 
 def last_trading_day() -> str:
     """上一个交易日（早上跑时用「昨天」的 A股数据 + 昨晚美股，预测今天）。"""
-    from datetime import timedelta
-    d = datetime.now() - timedelta(days=1)
+    d = now_cn() - timedelta(days=1)
     for _ in range(10):  # 最多往前找 10 天，跳过周末/节假日
         if is_trading_day(d.strftime("%Y-%m-%d")):
             return d.strftime("%Y-%m-%d")
         d -= timedelta(days=1)
-    return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    return (now_cn() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def is_weekly_update_day(date_str: str) -> bool:
@@ -319,7 +358,7 @@ def default_run_date() -> str | None:
     收盘后：跑当天数据；盘中/盘前：跑上一交易日（用昨天预测今天）；
     今天休市：返回 None（不跑）。
     """
-    now = datetime.now()
+    now = now_cn()
     today = now.strftime("%Y-%m-%d")
     if not is_trading_day(today):
         return None
@@ -436,6 +475,18 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
         }
         with open(os.path.join(BASE_DIR, "output", "summary.json"), "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 写数据清单：手机端据此判断 GitHub 数据是否已更新到目标交易日
+    try:
+        manifest = {
+            "result_date": date,
+            "updated_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
+            "engine": "stock_choose",
+        }
+        with open(os.path.join(BASE_DIR, "output", "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
     except Exception:  # noqa: BLE001
         pass
 

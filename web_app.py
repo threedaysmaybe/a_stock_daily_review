@@ -8,6 +8,8 @@ import glob
 import io
 import json
 import os
+import subprocess
+import sys
 import threading
 from datetime import datetime
 
@@ -44,11 +46,27 @@ def _run_pick(date_str: str = None):
         with contextlib.redirect_stdout(buf):
             stock_choose_main.run_daily_pipeline(cfg, date, push=True)
         _run_state["log"] = f"✅ 已完成 {date}\n" + buf.getvalue()
+        _push_output_async()
     except Exception as e:  # noqa: BLE001
         _run_state["log"] = str(e)
     finally:
         _run_state["running"] = False
         _run_state["finished"] = datetime.now().strftime("%H:%M:%S")
+
+
+def _push_output_async():
+    """后台推送 output 数据到 GitHub（不阻塞页面）。"""
+    try:
+        push_script = os.path.join(BASE_DIR, "push_output.py")
+        if os.path.exists(push_script):
+            subprocess.Popen(
+                [sys.executable, push_script],
+                cwd=BASE_DIR,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _load_summary() -> dict:
