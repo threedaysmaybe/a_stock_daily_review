@@ -7,7 +7,6 @@
 """
 import os
 import time
-import tushare as ts
 import numpy as np
 import pandas as pd
 
@@ -18,6 +17,7 @@ class TushareProvider:
     """Tushare 全市场截面数据。"""
 
     def __init__(self, factor_config: dict, token: str):
+        import tushare as ts  # 延迟导入：只有真正跑选股时才加载 tushare
         self.factor_config = factor_config
         self.token = token
         self.pro = ts.pro_api(token)

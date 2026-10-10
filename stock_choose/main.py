@@ -267,18 +267,30 @@ def run_long(cfg: dict, date: str, push: bool = True):
     return top
 
 
+_trade_dates_cache: set | None = None
+
+
+def _trade_dates() -> set:
+    """全市场交易日历（akshare，进程内缓存一次，避免重复请求拖慢页面）。"""
+    global _trade_dates_cache
+    if _trade_dates_cache is None:
+        try:
+            import akshare as ak
+            _trade_dates_cache = set(ak.tool_trade_date_hist_sina()["trade_date"].astype(str))
+        except Exception:  # noqa: BLE001
+            _trade_dates_cache = set()
+    return _trade_dates_cache
+
+
 def is_trading_day(date_str: str) -> bool:
     """判断是否交易日：优先用 akshare 交易日历（含节假日），失败退回周末判断。"""
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     if dt.weekday() >= 5:  # 周六(5)/周日(6)
         return False
-    try:
-        import akshare as ak
-        cal = ak.tool_trade_date_hist_sina()
-        trade_dates = set(cal["trade_date"].astype(str))
+    trade_dates = _trade_dates()
+    if trade_dates:
         return date_str in trade_dates
-    except Exception:  # noqa: BLE001 —— 拿不到日历，默认工作日即交易日
-        return True
+    return True  # 拿不到日历，默认工作日即交易日
 
 
 def last_trading_day() -> str:

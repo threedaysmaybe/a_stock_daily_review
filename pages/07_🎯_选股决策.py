@@ -85,9 +85,9 @@ with tab_quant:
     # ---- 纯 HTML 日历（绿色=有结果，点日期通过 URL 参数回传） ----
     @st.cache_data(ttl=3600)
     def _trade_cal_set() -> set:
+        # 复用引擎进程内缓存：default_run_date / 日历共用一次 akshare 请求
         try:
-            import akshare as ak
-            return set(ak.tool_trade_date_hist_sina()["trade_date"].astype(str))
+            return stock_choose_main._trade_dates()
         except Exception:
             return set()
 

@@ -12,13 +12,22 @@ import subprocess
 import time
 
 import pandas as pd
-import pywencai
-import pywencai.headers as _hdrs
-import pywencai.wencai as _wencai
+
+_pywencai_ready = False
 
 
-def _patch_pywencai():
-    """修复 pywencai 的 403 问题 + 抑制 node 噪音（幂等）。"""
+def _ensure_pywencai():
+    """延迟导入 pywencai 并修复 403 问题 + 抑制 node 噪音（幂等）。
+
+    只在真正调用问财接口时才加载 pywencai，避免拖慢页面首次打开。
+    """
+    global _pywencai_ready
+    if _pywencai_ready:
+        return
+    import pywencai
+    import pywencai.headers as _hdrs
+    import pywencai.wencai as _wencai
+
     # 1) 抑制 get_token 里 node 的 stderr 噪音
     def _quiet_get_token():
         js_path = os.path.join(os.path.dirname(_hdrs.__file__), "hexin-v.bundle.js")
@@ -41,9 +50,7 @@ def _patch_pywencai():
         return h
 
     _wencai.headers = _patched_headers
-
-
-_patch_pywencai()
+    _pywencai_ready = True
 
 
 # 因子名 -> 问财返回列名的匹配关键词（按优先级，前面的更精确）
@@ -133,6 +140,8 @@ class WencaiProvider:
         last_err = None
         for i in range(self.retry):
             try:
+                import pywencai
+                _ensure_pywencai()
                 return pywencai.get(query=query, query_type="stock", loop=True)
             except Exception as e:  # noqa: BLE001
                 last_err = e
