@@ -156,9 +156,19 @@ with tab_quant:
             cfg.setdefault("push", {})["sendkey"] = sendkey
 
         if not cfg.get("short_term", {}).get("tushare_token"):
+            # 诊断：把当前 Secrets 的键名（不含值）带进报错，方便排查写法问题
+            try:
+                detail = []
+                for k in list(st.secrets.keys()):
+                    v = st.secrets[k]
+                    detail.append(f"{k}:{list(v.keys())}" if isinstance(v, dict) else f"{k}:<非字典>")
+                keys_info = "；".join(detail) if detail else "（空）"
+            except Exception:
+                keys_info = "（读取失败）"
             raise FileNotFoundError(
-                "找不到选股引擎配置：Cloud 上需要配置 secrets['stock_choose']['tushare_token'] "
-                "（以及可选的 secrets['stock_choose']['sendkey']）"
+                "找不到选股引擎配置。当前 Cloud Secrets 顶层键为：" + keys_info +
+                "。正确写法：[stock_choose] 段下配 tushare_token = \"...\"（下划线），"
+                "可选 sendkey = \"...\""
             )
         return cfg
 
