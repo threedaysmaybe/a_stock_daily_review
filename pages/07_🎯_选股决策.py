@@ -39,8 +39,22 @@ with tab_quant:
 
     @st.cache_data(ttl=3600)
     def _get_engine_cfg() -> dict:
-        """加载内嵌引擎配置（stock_choose/config.yaml）。"""
-        return stock_choose_main.load_config("config.yaml")
+        """加载内嵌引擎配置：优先本地 stock_choose/config.yaml；
+        Streamlit Cloud 上从 secrets['stock_choose']['config_yaml'] 读取。"""
+        cfg_path = os.path.join(os.path.dirname(stock_choose_main.__file__), "config.yaml")
+        if os.path.exists(cfg_path):
+            return stock_choose_main.load_config(cfg_path)
+        try:
+            import yaml
+            secret_cfg = st.secrets["stock_choose"]["config_yaml"]
+        except Exception:
+            secret_cfg = ""
+        if secret_cfg:
+            return yaml.safe_load(secret_cfg)
+        raise FileNotFoundError(
+            "找不到选股引擎配置：本地无 stock_choose/config.yaml，"
+            "且 Streamlit Cloud 未配置 secrets['stock_choose']['config_yaml']"
+        )
 
     @st.cache_data(ttl=3600)
     def _default_trade_date() -> str:
