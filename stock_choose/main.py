@@ -482,6 +482,7 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
     try:
         manifest = {
             "result_date": date,
+            "result_dates": sorted(list_result_dates()),
             "updated_at": now_cn().strftime("%Y-%m-%d %H:%M:%S"),
             "engine": "stock_choose",
         }

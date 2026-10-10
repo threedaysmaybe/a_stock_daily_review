@@ -72,11 +72,26 @@ with tab_quant:
 
     def _try_github_refresh(expected_date: str) -> str | None:
         """GitHub 数据已更新到预期交易日 → 下载到临时目录并返回路径；否则返回 None。"""
-        if not expected_date or _gh_manifest().get("result_date") != expected_date:
+        manifest = _gh_manifest()
+        if not expected_date or manifest.get("result_date") != expected_date:
             return None
+        import glob
+        import shutil
         import tempfile
         dest = os.path.join(tempfile.gettempdir(), "sc_github_out")
-        for name in _GH_FILES + [f"短期选股_{expected_date.replace('-', '')}.xlsx"]:
+        os.makedirs(dest, exist_ok=True)
+        # 1) 先把部署仓库里已有的历史结果复制过来，保证所有跑过的日期都标绿
+        repo_out = os.path.join(os.path.dirname(stock_choose_main.__file__), "output")
+        for f in glob.glob(os.path.join(repo_out, "短期选股_*.xlsx")):
+            try:
+                shutil.copy(f, os.path.join(dest, os.path.basename(f)))
+            except Exception:
+                pass
+        # 2) 从 GitHub 下载 manifest 里列出的全部结果日期（覆盖为最新）
+        for ds in manifest.get("result_dates", [expected_date]):
+            _gh_download(f"短期选股_{ds.replace('-', '')}.xlsx", dest)
+        # 3) 下载其它公共数据文件
+        for name in _GH_FILES:
             _gh_download(name, dest)
         if os.path.exists(os.path.join(dest, "summary.json")) and \
            os.path.exists(os.path.join(dest, f"短期选股_{expected_date.replace('-', '')}.xlsx")):
