@@ -775,12 +775,28 @@ def _ts_inst_to_lhb(inst_df: pd.DataFrame) -> pd.DataFrame:
         "net_buy": "净额",
     })
     df["股票代码"] = df["股票代码"].astype(str).str.split(".").str[0].str.zfill(6)
+
+    # 名称映射：优先本地 stock_list.csv（无需网络，手机端也能用），失败再 tushare，再失败留空
+    name_map = {}
     try:
-        names = _get_tushare().pro.stock_basic(exchange="", list_status="L", fields="ts_code,name")
-        name_map = dict(zip(names["ts_code"], names["name"]))
-        df["股票名称"] = inst_df["ts_code"].map(name_map)
+        import data_paths as _dp
+        sl_path = os.path.join(_dp.data_dir(), "stock_list.csv")
+        if os.path.exists(sl_path):
+            sl = pd.read_csv(sl_path, encoding="utf-8-sig")
+            if "code" in sl.columns and "name" in sl.columns:
+                name_map = dict(zip(
+                    sl["code"].astype(str).str[-6:],
+                    sl["name"].astype(str),
+                ))
     except Exception:  # noqa: BLE001
-        df["股票名称"] = ""
+        name_map = {}
+    if not name_map:
+        try:
+            names = _get_tushare().pro.stock_basic(exchange="", list_status="L", fields="ts_code,name")
+            name_map = dict(zip(names["ts_code"], names["name"]))
+        except Exception:  # noqa: BLE001
+            name_map = {}
+    df["股票名称"] = df["股票代码"].map(name_map).fillna("")
     return df
 
 
@@ -791,6 +807,9 @@ def get_lhb_recent(days: int = 10) -> pd.DataFrame:
     if local is None or local.empty:
         local = dm.load_local(f"lhb_{days}.csv")
     if local is not None and not local.empty:
+        # 本地 lhb.csv 是 Tushare top_inst 原始格式（exalter）→ 转成下游兼容字段
+        if "exalter" in local.columns and "交易营业部名称" not in local.columns:
+            local = _ts_inst_to_lhb(local)
         return local
     if not cfg.ALLOW_REALTIME_API:
         return pd.DataFrame()
