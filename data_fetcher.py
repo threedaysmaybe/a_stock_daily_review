@@ -763,20 +763,14 @@ def get_stock_fund_flow(code: str) -> dict:
 # 5. 龙虎榜 & 游资
 # ============================================================
 
-def _ts_inst_to_lhb(inst_df: pd.DataFrame) -> pd.DataFrame:
-    """Tushare top_inst → 东财龙虎榜字段格式（下游兼容）。"""
-    if inst_df is None or inst_df.empty:
-        return pd.DataFrame()
-    df = inst_df.rename(columns={
-        "exalter": "交易营业部名称",
-        "ts_code": "股票代码",
-        "buy": "买入金额",
-        "sell": "卖出金额",
-        "net_buy": "净额",
-    })
-    df["股票代码"] = df["股票代码"].astype(str).str.split(".").str[0].str.zfill(6)
+_stock_name_map_cache = None
 
-    # 名称映射：优先本地 stock_list.csv（无需网络，手机端也能用），失败再 tushare，再失败留空
+
+def _stock_name_map() -> dict:
+    """股票代码(6位) → 名称。优先本地 stock_list.csv，失败再 Tushare，再失败空。"""
+    global _stock_name_map_cache
+    if _stock_name_map_cache is not None:
+        return _stock_name_map_cache
     name_map = {}
     try:
         import data_paths as _dp
@@ -793,10 +787,35 @@ def _ts_inst_to_lhb(inst_df: pd.DataFrame) -> pd.DataFrame:
     if not name_map:
         try:
             names = _get_tushare().pro.stock_basic(exchange="", list_status="L", fields="ts_code,name")
-            name_map = dict(zip(names["ts_code"], names["name"]))
+            name_map = dict(zip(names["ts_code"].str.split(".").str[0], names["name"]))
         except Exception:  # noqa: BLE001
             name_map = {}
-    df["股票名称"] = df["股票代码"].map(name_map).fillna("")
+    _stock_name_map_cache = name_map
+    return name_map
+
+
+def _normalize_lhb(lhb_df: pd.DataFrame) -> pd.DataFrame:
+    """把 Tushare top_inst 原始列统一成下游字段（幂等）。
+
+    Tushare：trade_date/ts_code/exalter/buy/sell/net_buy/side/reason
+    东财（旧）：交易营业部名称/股票代码/股票名称/买入金额/卖出金额/净额
+    下游统一用东财列名；本函数让两种来源都能直接喂给筛选。
+    """
+    if lhb_df is None or lhb_df.empty:
+        return pd.DataFrame()
+    df = lhb_df.copy()
+    if "exalter" in df.columns and "交易营业部名称" not in df.columns:
+        df = df.rename(columns={
+            "exalter": "交易营业部名称",
+            "ts_code": "股票代码",
+            "buy": "买入金额",
+            "sell": "卖出金额",
+            "net_buy": "净额",
+        })
+    if "股票代码" in df.columns:
+        df["股票代码"] = df["股票代码"].astype(str).str.split(".").str[0].str.zfill(6)
+    if "股票名称" not in df.columns:
+        df["股票名称"] = df["股票代码"].map(_stock_name_map()).fillna("")
     return df
 
 
@@ -807,9 +826,7 @@ def get_lhb_recent(days: int = 10) -> pd.DataFrame:
     if local is None or local.empty:
         local = dm.load_local(f"lhb_{days}.csv")
     if local is not None and not local.empty:
-        # 本地 lhb.csv 是 Tushare top_inst 原始格式（exalter）→ 转成下游兼容字段
-        if "exalter" in local.columns and "交易营业部名称" not in local.columns:
-            local = _ts_inst_to_lhb(local)
+        # 本地 lhb.csv 是 Tushare top_inst 原始格式；筛选函数会统一转换
         return local
     if not cfg.ALLOW_REALTIME_API:
         return pd.DataFrame()
@@ -828,7 +845,7 @@ def get_lhb_recent(days: int = 10) -> pd.DataFrame:
         if not dfs:
             return pd.DataFrame()
         df = pd.concat(dfs, ignore_index=True)
-        df = _ts_inst_to_lhb(df)  # 字段映射成下游兼容格式
+        df = _normalize_lhb(df)  # 统一成下游字段
         dm.save_local(df, f"lhb_{days}.csv")
         return df
     except Exception:  # noqa: BLE001
@@ -836,7 +853,8 @@ def get_lhb_recent(days: int = 10) -> pd.DataFrame:
 
 
 def filter_hot_money(lhb_df: pd.DataFrame) -> pd.DataFrame:
-    """从龙虎榜数据中筛选游资操作"""
+    """从龙虎榜数据中筛选游资操作（Tushare / 东财格式都直接认）。"""
+    lhb_df = _normalize_lhb(lhb_df)
     if lhb_df.empty:
         return pd.DataFrame()
 
