@@ -4,11 +4,11 @@
     "direction": 1
   },
   "main_net_inflow": {
-    "weight": 0.3078,
+    "weight": 0.3705,
     "direction": 1
   },
   "volume_ratio": {
-    "weight": 0.3146,
+    "weight": 0.453,
     "direction": 1
   },
   "turnover": {
@@ -16,7 +16,7 @@
     "direction": 1
   },
   "float_market_cap": {
-    "weight": 0.0306,
+    "weight": 0.0135,
     "direction": 1
   },
   "ma_bias": {
@@ -44,7 +44,7 @@
     "direction": -1
   },
   "dividend_yield": {
-    "weight": 0.4876,
+    "weight": 0.5,
     "direction": 1
   }
 }

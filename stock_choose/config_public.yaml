@@ -15,20 +15,20 @@ short_term:
       direction: 1
     main_net_inflow:
       query: 主力资金流向
-      weight: 0.2558
+      weight: 0.3377
       direction: 1
     volume_ratio:
       query: 量比
-      weight: 0.2185
+      weight: 0.3775
       direction: 1
     turnover:
       query: 换手率
       weight: 0.01
-      direction: 1
+      direction: -1
     float_market_cap:
       query: 流通市值
-      weight: 0.0693
-      direction: 1
+      weight: 0.0203
+      direction: -1
     ma_bias:
       weight: 0.5
       direction: 1
