@@ -58,7 +58,7 @@ def _write_data_manifest():
 
 def main():
     _write_data_manifest()
-    _run(["git", "add", "data", "stock_choose/output"])
+    _run(["git", "add", "data", "stock_choose/output", "stock_choose/config_public.yaml"])
     _run(["git", "commit", "-m", "数据更新 " + datetime.now().strftime("%Y-%m-%d %H:%M")])
 
     last = None

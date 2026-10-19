@@ -571,7 +571,10 @@ def main():
     # 长期表：每周一跑（或手动 --long 强制）
     is_monday = datetime.strptime(date, "%Y-%m-%d").weekday() == 0
     if args.long or is_monday:
-        run_long(cfg, date)
+        try:
+            run_long(cfg, date)
+        except Exception as e:  # noqa: BLE001 —— 长期表失败不影响每日短期流程
+            print(f"[长期] 长期表失败（不影响短期结果）：{type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":
