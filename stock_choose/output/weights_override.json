@@ -4,7 +4,7 @@
     "direction": 1
   },
   "main_net_inflow": {
-    "weight": 0.3705,
+    "weight": 0.0,
     "direction": 1
   },
   "volume_ratio": {
@@ -20,7 +20,7 @@
     "direction": 1
   },
   "ma_bias": {
-    "weight": 0.5,
+    "weight": 0.0,
     "direction": 1
   },
   "amplitude": {
@@ -28,7 +28,7 @@
     "direction": -1
   },
   "main_inflow_5d": {
-    "weight": 0.5,
+    "weight": 0.0,
     "direction": 1
   },
   "turnover_5d": {
