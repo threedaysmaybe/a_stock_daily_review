@@ -595,12 +595,12 @@ def _download_lhb() -> pd.DataFrame:
 
 
 def _download_lhb_tushare() -> pd.DataFrame:
-    """龙虎榜席位明细（Tushare top_inst，近5日，稳定不封）。"""
+    """龙虎榜席位明细（Tushare top_inst，近15个自然日≈10个交易日，稳定不封）。"""
     try:
         from tushare_source import TushareSource
         src = TushareSource(cfg.TUSHARE_TOKEN)
         dfs = []
-        for i in range(5):
+        for i in range(15):
             date_str = (datetime.now() - timedelta(days=i)).strftime("%Y%m%d")
             try:
                 inst = src.get_lhb_inst(date_str)

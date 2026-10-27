@@ -1450,14 +1450,21 @@ def _to_ts_code(code: str) -> str:
 
 
 _period_return_cache: dict = {}
+_last_ts_daily_call = 0.0
 
 
 def _get_period_return(code: str, start_date: str, end_date: str):
     """持仓期间涨幅 = 最近收盘 / 首次收盘 - 1（百分比）。"""
+    global _last_ts_daily_call
     key = (str(code), str(start_date), str(end_date))
     if key in _period_return_cache:
         return _period_return_cache[key]
     try:
+        # Tushare 限速 10次/秒，两次调用间隔 ≥ 0.12s
+        wait = 0.12 - (time.time() - _last_ts_daily_call)
+        if wait > 0:
+            time.sleep(wait)
+        _last_ts_daily_call = time.time()
         pro = _get_tushare().pro
         daily = pro.daily(ts_code=_to_ts_code(code), start_date=str(start_date), end_date=str(end_date))
         if daily is None or daily.empty:
@@ -1498,16 +1505,26 @@ def get_hot_money_positions(hot_df: pd.DataFrame) -> pd.DataFrame:
 
     g["状态"] = g.apply(_status, axis=1)
 
-    # 持仓天数（首次买入 → 最近操作，自然日；当天买入算 1 天）
-    g["持仓天数"] = g.apply(
-        lambda r: (datetime.strptime(str(r["最近操作"]), "%Y%m%d") - datetime.strptime(str(r["首次买入"]), "%Y%m%d")).days + 1,
-        axis=1,
-    )
-    # 持仓期间涨幅（首次买入收盘 → 最近操作收盘）；拿不到行情显示 —
-    g["期间涨幅%"] = g.apply(
-        lambda r: _get_period_return(r["股票代码"], str(r["首次买入"]), str(r["最近操作"])),
-        axis=1,
-    )
+    # 持仓天数 / 期间涨幅：
+    # - 持仓中：从首次买入算到「今天」（最新收盘），不是算到最后一次上榜日
+    # - 已清仓/疑似清仓：从首次买入算到清仓日（最近操作）
+    today_str = datetime.now().strftime("%Y%m%d")
+
+    def _calc_hold(r):
+        first = str(r["首次买入"])
+        last = str(r["最近操作"])
+        if r["状态"] == "持仓中":
+            end = today_str
+        else:
+            end = last
+        try:
+            days = (datetime.strptime(end, "%Y%m%d") - datetime.strptime(first, "%Y%m%d")).days + 1
+        except Exception:  # noqa: BLE001
+            days = 1
+        ret = _get_period_return(r["股票代码"], first, end)
+        return pd.Series([days, ret], index=["持仓天数", "期间涨幅%"])
+
+    g[["持仓天数", "期间涨幅%"]] = g.apply(_calc_hold, axis=1)
     g["期间涨幅%"] = g["期间涨幅%"].fillna("—")
     # 金额转万元（原始是元）
     g["净持仓(万)"] = ((g["累计买入"] - g["累计卖出"]) / 1e4).round(2)
