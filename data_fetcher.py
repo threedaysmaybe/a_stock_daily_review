@@ -1440,12 +1440,12 @@ def get_industry_pct() -> dict:
 
 
 def _to_ts_code(code: str) -> str:
-    """6位代码 → Tushare 代码（6开头.SH，其余.SZ/.BJ）。"""
+    """6位代码 → Tushare 代码（6/9开头.SH，0/3开头.SZ，4/8/92开头.BJ）。"""
     c = str(code).zfill(6)
-    if c.startswith("6"):
-        return c + ".SH"
-    if c.startswith(("4", "8")):
+    if c.startswith(("4", "8")) or c.startswith("92"):
         return c + ".BJ"
+    if c.startswith("6") or c.startswith("9"):
+        return c + ".SH"
     return c + ".SZ"
 
 
