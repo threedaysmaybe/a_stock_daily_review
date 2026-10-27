@@ -1449,17 +1449,26 @@ def _to_ts_code(code: str) -> str:
     return c + ".SZ"
 
 
+_period_return_cache: dict = {}
+
+
 def _get_period_return(code: str, start_date: str, end_date: str):
     """持仓期间涨幅 = 最近收盘 / 首次收盘 - 1（百分比）。"""
+    key = (str(code), str(start_date), str(end_date))
+    if key in _period_return_cache:
+        return _period_return_cache[key]
     try:
         pro = _get_tushare().pro
         daily = pro.daily(ts_code=_to_ts_code(code), start_date=str(start_date), end_date=str(end_date))
         if daily is None or daily.empty:
-            return None
-        daily = daily.sort_values("trade_date")
-        return round((float(daily["close"].iloc[-1]) / float(daily["close"].iloc[0]) - 1) * 100, 2)
+            val = None
+        else:
+            daily = daily.sort_values("trade_date")
+            val = round((float(daily["close"].iloc[-1]) / float(daily["close"].iloc[0]) - 1) * 100, 2)
     except Exception:  # noqa: BLE001
-        return None
+        val = None
+    _period_return_cache[key] = val
+    return val
 
 
 def get_hot_money_positions(hot_df: pd.DataFrame) -> pd.DataFrame:

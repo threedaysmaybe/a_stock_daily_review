@@ -105,6 +105,9 @@ def _load_tushare_token():
         import streamlit as st
         if st.secrets.get("TUSHARE_TOKEN"):
             return st.secrets["TUSHARE_TOKEN"]
+        # 兼容选股引擎的 Secrets 段（[stock_choose] tushare_token）
+        if st.secrets.get("stock_choose", {}).get("tushare_token"):
+            return st.secrets["stock_choose"]["tushare_token"]
     except Exception:
         pass
     token = os.environ.get("TUSHARE_TOKEN")
