@@ -767,7 +767,11 @@ _stock_name_map_cache = None
 
 
 def _stock_name_map() -> dict:
-    """股票代码(6位) → 名称。优先本地 stock_list.csv，失败再 Tushare，再失败空。"""
+    """股票代码(6位) → 名称。
+
+    优先本地 stock_list.csv（快、无网络）；若配置了 Tushare token，再用
+    stock_basic 补齐本地缺失的代码（新股/漏掉的），最后缓存。
+    """
     global _stock_name_map_cache
     if _stock_name_map_cache is not None:
         return _stock_name_map_cache
@@ -784,7 +788,17 @@ def _stock_name_map() -> dict:
                 ))
     except Exception:  # noqa: BLE001
         name_map = {}
-    if not name_map:
+    # 有 token 时用 Tushare 补齐缺失代码名称
+    if cfg.TUSHARE_TOKEN:
+        try:
+            names = _get_tushare().pro.stock_basic(exchange="", list_status="L", fields="ts_code,name")
+            for _, r in names.iterrows():
+                code = str(r["ts_code"]).split(".")[0]
+                if code and code not in name_map:
+                    name_map[code] = str(r["name"])
+        except Exception:  # noqa: BLE001
+            pass
+    if not name_map and not cfg.TUSHARE_TOKEN:
         try:
             names = _get_tushare().pro.stock_basic(exchange="", list_status="L", fields="ts_code,name")
             name_map = dict(zip(names["ts_code"].str.split(".").str[0], names["name"]))
@@ -1346,6 +1360,10 @@ def get_industry_leaders(top_n: int = 2) -> pd.DataFrame:
     返回列：trade_date, industry, ts_code, name, total_mv(万), circ_mv(万),
             turnover_rate, pe, pb, pct_chg
     """
+    # 优先读本地每日快照（下载任务会写 data/<日期>/industry_leaders.csv，手机端同步后也能用）
+    local = dm.load_local("industry_leaders.csv")
+    if local is not None and not local.empty:
+        return local
     if not cfg.ALLOW_REALTIME_API:
         return pd.DataFrame()
     try:
@@ -1471,16 +1489,17 @@ def get_hot_money_positions(hot_df: pd.DataFrame) -> pd.DataFrame:
 
     g["状态"] = g.apply(_status, axis=1)
 
-    # 持仓天数（首次买入 → 最近操作，自然日）
+    # 持仓天数（首次买入 → 最近操作，自然日；当天买入算 1 天）
     g["持仓天数"] = g.apply(
-        lambda r: (datetime.strptime(str(r["最近操作"]), "%Y%m%d") - datetime.strptime(str(r["首次买入"]), "%Y%m%d")).days,
+        lambda r: (datetime.strptime(str(r["最近操作"]), "%Y%m%d") - datetime.strptime(str(r["首次买入"]), "%Y%m%d")).days + 1,
         axis=1,
     )
-    # 持仓期间涨幅（首次买入收盘 → 最近操作收盘）
+    # 持仓期间涨幅（首次买入收盘 → 最近操作收盘）；拿不到行情显示 —
     g["期间涨幅%"] = g.apply(
         lambda r: _get_period_return(r["股票代码"], str(r["首次买入"]), str(r["最近操作"])),
         axis=1,
     )
+    g["期间涨幅%"] = g["期间涨幅%"].fillna("—")
     # 金额转万元（原始是元）
     g["净持仓(万)"] = ((g["累计买入"] - g["累计卖出"]) / 1e4).round(2)
     g["累计买入(万)"] = (g["累计买入"] / 1e4).round(2)

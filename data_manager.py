@@ -260,6 +260,12 @@ def _build_task_list() -> list:
         "filename": "lhb.csv",
         "fn": _download_lhb_tushare,
     })
+    # 5.6 行业龙头股（板块龙头页用，每日快照，手机端也靠它）
+    tasks.append({
+        "name": "行业龙头股",
+        "filename": "industry_leaders.csv",
+        "fn": _download_industry_leaders,
+    })
     tasks.append({
         "name": "市场资金流",
         "filename": "market_fund_flow.csv",
@@ -606,6 +612,44 @@ def _download_lhb_tushare() -> pd.DataFrame:
         if not dfs:
             return pd.DataFrame()
         return pd.concat(dfs, ignore_index=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _download_industry_leaders() -> pd.DataFrame:
+    """每个行业市值前 5 龙头（Tushare stock_basic + daily_basic）。
+
+    自动回退：若最新交易日 daily_basic 还没出（盘中/收盘前），往前找最近有数据的交易日。
+    """
+    try:
+        from tushare_source import TushareSource
+        src = TushareSource(cfg.TUSHARE_TOKEN)
+        cal = src.pro.trade_cal(exchange="SSE", is_open="1", end_date=datetime.now().strftime("%Y%m%d"))
+        tds = sorted(cal["cal_date"].tolist())[-6:] if cal is not None and not cal.empty else []
+        db, td = None, None
+        for d in reversed(tds):
+            try:
+                db = src.pro.daily_basic(trade_date=d, fields="ts_code,total_mv,circ_mv,turnover_rate,pe,pb")
+            except Exception:
+                db = None
+            if db is not None and not db.empty:
+                td = d
+                break
+        if td is None:
+            return pd.DataFrame()
+        sb = src.pro.stock_basic(exchange="", list_status="L", fields="ts_code,name,industry")
+        daily = src.pro.daily(trade_date=td, fields="ts_code,pct_chg")
+        m = sb.merge(db, on="ts_code", how="inner")
+        if daily is not None and not daily.empty:
+            m = m.merge(daily[["ts_code", "pct_chg"]], on="ts_code", how="left")
+        else:
+            m["pct_chg"] = 0
+        m = m[m["industry"].notna() & (m["industry"] != "")]
+        leaders = (m.sort_values("total_mv", ascending=False)
+                   .groupby("industry", group_keys=False).head(5)
+                   .reset_index(drop=True))
+        leaders["trade_date"] = td
+        return leaders
     except Exception:
         return pd.DataFrame()
 

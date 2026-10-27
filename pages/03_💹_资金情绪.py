@@ -244,8 +244,13 @@ else:
         st.subheader("💼 游资当前持仓")
         if not _holding.empty:
             _h = _holding.copy()
-            _h["首次买入"] = _h["首次买入"].astype(str).str[4:6] + "-" + _h["首次买入"].astype(str).str[6:8]
-            _h["最近操作"] = _h["最近操作"].astype(str).str[4:6] + "-" + _h["最近操作"].astype(str).str[6:8]
+
+            def _fmt_date(v):
+                s = str(v)
+                return s[4:6] + "-" + s[6:8] if len(s) >= 8 and s[:8].isdigit() else "-"
+
+            _h["首次买入"] = _h["首次买入"].apply(_fmt_date)
+            _h["最近操作"] = _h["最近操作"].apply(_fmt_date)
             _h["_ord"] = _h["hot_money_name"].map(_order).fillna(9999)
             _h = _h.sort_values("_ord").reset_index(drop=True)
             st.markdown(
@@ -261,8 +266,13 @@ else:
         st.subheader("🚪 最近清仓")
         if not _cleared.empty:
             _c = _cleared.copy()
-            _c["清仓日"] = _c["最近操作"].astype(str).str[4:6] + "-" + _c["最近操作"].astype(str).str[6:8]
-            _c["首次买入"] = _c["首次买入"].astype(str).str[4:6] + "-" + _c["首次买入"].astype(str).str[6:8]
+
+            def _fmt_date2(v):
+                s = str(v)
+                return s[4:6] + "-" + s[6:8] if len(s) >= 8 and s[:8].isdigit() else "-"
+
+            _c["清仓日"] = _c["最近操作"].apply(_fmt_date2)
+            _c["首次买入"] = _c["首次买入"].apply(_fmt_date2)
             _c["_ord"] = _c["hot_money_name"].map(_order).fillna(9999)
             _c = _c.sort_values("_ord").reset_index(drop=True)
             st.markdown(
