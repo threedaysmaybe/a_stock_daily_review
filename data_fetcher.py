@@ -1453,6 +1453,29 @@ _period_return_cache: dict = {}
 _last_ts_daily_call = 0.0
 
 
+def _latest_trading_day() -> str:
+    """最新「已收盘」交易日：今天若是交易日且已过 15:30 用今天，否则上一交易日。"""
+    now = datetime.now()
+    today = now.strftime("%Y%m%d")
+    try:
+        src = _get_tushare()
+        cal = src.pro.trade_cal(exchange="SSE", is_open="1", end_date=today)
+        if cal is not None and not cal.empty:
+            tds = sorted(cal["cal_date"].astype(str).tolist())
+            if today in tds and now.strftime("%H:%M") >= "15:30":
+                return today
+            prev = [d for d in tds if d < today]
+            if prev:
+                return prev[-1]
+    except Exception:  # noqa: BLE001
+        pass
+    # 兜底：周末直接回退到周五（节假日近似处理）
+    d = now
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d.strftime("%Y%m%d")
+
+
 def _get_period_return(code: str, start_date: str, end_date: str):
     """持仓期间涨幅 = 最近收盘 / 首次收盘 - 1（百分比）。"""
     global _last_ts_daily_call
@@ -1506,15 +1529,15 @@ def get_hot_money_positions(hot_df: pd.DataFrame) -> pd.DataFrame:
     g["状态"] = g.apply(_status, axis=1)
 
     # 持仓天数 / 期间涨幅：
-    # - 持仓中：从首次买入算到「今天」（最新收盘），不是算到最后一次上榜日
+    # - 持仓中：从首次买入算到「最新已收盘交易日」，不是算到最后一次上榜日
     # - 已清仓/疑似清仓：从首次买入算到清仓日（最近操作）
-    today_str = datetime.now().strftime("%Y%m%d")
+    end_str = _latest_trading_day()
 
     def _calc_hold(r):
         first = str(r["首次买入"])
         last = str(r["最近操作"])
         if r["状态"] == "持仓中":
-            end = today_str
+            end = end_str
         else:
             end = last
         try:
