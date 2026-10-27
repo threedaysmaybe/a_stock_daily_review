@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -61,12 +62,16 @@ def main():
     _run(["git", "add", "data", "stock_choose/output", "stock_choose/config_public.yaml"])
     _run(["git", "commit", "-m", "数据更新 " + datetime.now().strftime("%Y-%m-%d %H:%M")])
 
+    # 推送：先代理，再直连；每种方式重试 3 次（GitHub 直连间歇性可达）
     last = None
     for extra in ([], ["-c", "http.proxy=", "-c", "https.proxy="]):
-        last = _run(["git"] + extra + ["push", "origin", "main"])
-        if last.returncode == 0:
-            print("已推送到 GitHub")
-            return 0
+        for attempt in range(3):
+            last = _run(["git"] + extra + ["push", "origin", "main"])
+            if last.returncode == 0:
+                print("已推送到 GitHub")
+                return 0
+            if attempt < 2:
+                time.sleep(5)
     print("推送失败：" + (last.stderr or last.stdout or ""))
     return 1
 

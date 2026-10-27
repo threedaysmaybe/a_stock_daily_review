@@ -9,6 +9,7 @@
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -24,10 +25,13 @@ def _run(args):
 def _push():
     last = None
     for extra in ([], ["-c", "http.proxy=", "-c", "https.proxy="]):
-        last = _run(["git"] + extra + ["push", "origin", "main"])
-        if last.returncode == 0:
-            print("推送成功 ✅")
-            return
+        for attempt in range(3):
+            last = _run(["git"] + extra + ["push", "origin", "main"])
+            if last.returncode == 0:
+                print("推送成功 ✅")
+                return
+            if attempt < 2:
+                time.sleep(5)
     print("推送失败：" + (last.stderr.strip()[-200:] if last and last.stderr else ""))
 
 
