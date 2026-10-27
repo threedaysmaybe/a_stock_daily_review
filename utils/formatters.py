@@ -13,7 +13,7 @@ def fmt_dataframe(df):
     if df is None or df.empty: return df
     result = df.copy()
     money_kw = ['金额','成交','买入','卖出','净额','净买','市值','收入','利润','资产','成交额','流入','流出']
-    skip_kw  = ['代码','code','名称','name','序号','数量','count','次数','PE','PB','pe','pb','连板','封板']
+    skip_kw  = ['代码','code','名称','name','序号','数量','count','次数','PE','PB','pe','pb','连板','封板','首次','最近','清仓']
     
     for col in result.columns:
         cs = str(col).lower()
