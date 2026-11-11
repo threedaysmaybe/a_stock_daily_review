@@ -450,27 +450,27 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
 
     # 每日验证 + 动态股票池（验证前一日选股，更新股票池）
     verify = daily_verify.verify_prev_selection(date)
-    market_avg = None
+    market_avg = daily_verify.get_market_avg()
     changes = {"added": [], "kept": [], "removed": []}
     if verify is not None:
-        market_avg = daily_verify.get_market_avg()
         daily_verify.append_verify_record(date, verify, market_avg)
-        # 空仓日也要更新股票池：不新增，但照常淘汰跑输大盘的弱股
-        names = dict(zip(top["code"], top["name"])) if top is not None and len(top) else {}
-        today_codes = top["code"].tolist() if top is not None and len(top) else []
-        changes = daily_verify.update_watchlist(date, today_codes, names,
-                                                 up_ratio=sentiment.get("up_ratio"),
-                                                 market_avg=market_avg)
-        # 复盘撤票：外围风险时，撤掉前一天推的误判票
-        if sentiment.get("overseas_risk"):
-            misremoved = daily_verify.remove_misjudged(verify["prev_date"], date)
-            if misremoved:
-                changes["removed"] = changes.get("removed", []) + misremoved
-                print(f"[复盘] 外围风险，撤掉昨日误判 {len(misremoved)} 只")
-        print(f"[验证] 昨日({verify['prev_date']})胜率 {verify['win_rate']:.0%}，"
-              f"股票池 新增{len(changes['added'])} 移除{len(changes['removed'])}")
+        print(f"[验证] 昨日({verify['prev_date']})胜率 {verify['win_rate']:.0%}")
     else:
         print("[验证] 无上一交易日选股结果，跳过（首次运行或昨日空仓）")
+
+    # 股票池更新独立于验证：今天有选股就加入，池子里的弱股照常淘汰（空仓日也淘汰）
+    names = dict(zip(top["code"], top["name"])) if top is not None and len(top) else {}
+    today_codes = top["code"].tolist() if top is not None and len(top) else []
+    changes = daily_verify.update_watchlist(date, today_codes, names,
+                                             up_ratio=sentiment.get("up_ratio"),
+                                             market_avg=market_avg)
+    # 复盘撤票：外围风险时，撤掉前一天推的误判票
+    if verify is not None and sentiment.get("overseas_risk"):
+        misremoved = daily_verify.remove_misjudged(verify["prev_date"], date)
+        if misremoved:
+            changes["removed"] = changes.get("removed", []) + misremoved
+            print(f"[复盘] 外围风险，撤掉昨日误判 {len(misremoved)} 只")
+    print(f"[股票池] 新增{len(changes['added'])} 移除{len(changes['removed'])} 保留{len(changes['kept'])}")
 
     # 合并推送文案：选股 + 昨日表现 + 胜率曲线 + 完整股票池
     msg = daily_verify.format_daily_message(date, top, sentiment, verify, market_avg, changes)
