@@ -35,7 +35,7 @@ def _push():
 
     # 兜底：SSH（443 端口，墙内通常可达）。需要公钥已加到 GitHub 账号
     os.environ["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
-    last = _run(["git", "push", "git@ssh.github.com:443/threedaysmaybe/a_stock_daily_review.git", "main"])
+    last = _run(["git", "push", "ssh://git@ssh.github.com:443/threedaysmaybe/a_stock_daily_review.git", "main"])
     if last.returncode == 0:
         print("已通过 SSH 推送到 GitHub ✅")
         return
