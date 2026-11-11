@@ -4,43 +4,47 @@
     "direction": 1
   },
   "main_net_inflow": {
-    "weight": 0.2642,
+    "weight": 0.2149,
     "direction": 1
   },
   "volume_ratio": {
-    "weight": 0.5,
+    "weight": 0.4354,
     "direction": 1
   },
   "turnover": {
     "weight": 0.01,
-    "direction": 1
+    "direction": -1
   },
   "float_market_cap": {
-    "weight": 0.0121,
+    "weight": 0.0155,
     "direction": -1
   },
   "ma_bias": {
-    "weight": 0.1641,
-    "direction": 1
+    "weight": 0.095,
+    "direction": -1
   },
   "amplitude": {
     "weight": 0.01,
-    "direction": -1
+    "direction": 1
   },
   "turnover_5d": {
     "weight": 0.01,
-    "direction": -1
+    "direction": 1
   },
   "pe_ttm": {
     "weight": 0.01,
-    "direction": -1
+    "direction": 1
   },
   "pb": {
     "weight": 0.01,
-    "direction": -1
+    "direction": 1
   },
   "dividend_yield": {
     "weight": 0.5,
+    "direction": 1
+  },
+  "total_market_cap": {
+    "weight": 0.0624,
     "direction": 1
   }
 }
