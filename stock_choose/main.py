@@ -441,6 +441,13 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
     import json
     top, sentiment = run_short(cfg, date)
 
+    # 空仓原因（推送里说明为什么没选股）
+    if top is None or len(top) == 0:
+        if sentiment.get("overseas_risk"):
+            sentiment["empty_reason"] = "外围风险"
+        else:
+            sentiment["empty_reason"] = "无个股通过门槛/打分"
+
     # 每日验证 + 动态股票池（验证前一日选股，更新股票池）
     verify = daily_verify.verify_prev_selection(date)
     market_avg = None
@@ -448,11 +455,12 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
     if verify is not None:
         market_avg = daily_verify.get_market_avg()
         daily_verify.append_verify_record(date, verify, market_avg)
-        if top is not None and len(top):
-            names = dict(zip(top["code"], top["name"]))
-            changes = daily_verify.update_watchlist(date, top["code"].tolist(), names,
-                                                     up_ratio=sentiment.get("up_ratio"),
-                                                     market_avg=market_avg)
+        # 空仓日也要更新股票池：不新增，但照常淘汰跑输大盘的弱股
+        names = dict(zip(top["code"], top["name"])) if top is not None and len(top) else {}
+        today_codes = top["code"].tolist() if top is not None and len(top) else []
+        changes = daily_verify.update_watchlist(date, today_codes, names,
+                                                 up_ratio=sentiment.get("up_ratio"),
+                                                 market_avg=market_avg)
         # 复盘撤票：外围风险时，撤掉前一天推的误判票
         if sentiment.get("overseas_risk"):
             misremoved = daily_verify.remove_misjudged(verify["prev_date"], date)
@@ -462,7 +470,7 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
         print(f"[验证] 昨日({verify['prev_date']})胜率 {verify['win_rate']:.0%}，"
               f"股票池 新增{len(changes['added'])} 移除{len(changes['removed'])}")
     else:
-        print("[验证] 无上一交易日选股结果，跳过（首次运行）")
+        print("[验证] 无上一交易日选股结果，跳过（首次运行或昨日空仓）")
 
     # 合并推送文案：选股 + 昨日表现 + 胜率曲线 + 完整股票池
     msg = daily_verify.format_daily_message(date, top, sentiment, verify, market_avg, changes)

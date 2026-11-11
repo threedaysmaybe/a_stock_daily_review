@@ -158,7 +158,7 @@ def remove_misjudged(prev_date: str, today: str) -> list:
         gone = str(row.get("移除日期", "")).strip()
         if joined == prev_date and gone == "":
             wl.at[idx, "移除日期"] = today
-            removed.append(str(row["code"]))
+            removed.append({"code": str(row["code"]), "name": str(row.get("name", "")), "ret": None})
     if removed:
         save_watchlist(wl)
     return removed
@@ -383,8 +383,9 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
 
     # 今日精选 Top20，分「主板」和「创业板/科创板」两组（空仓时跳过）
     if top is None or len(top) == 0:
+        reason = sentiment.get("empty_reason") or "未给出"
         lines.append("")
-        lines.append("**今日精选：空仓（外围风险），今日不选股**")
+        lines.append(f"**今日精选：空仓（{reason}），今日不选股**")
     else:
         top20 = top.head(20)
         is_cyb = top20["code"].astype(str).str.startswith(("300", "301", "688"))
@@ -412,6 +413,9 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
         lines.append("```")
         lines.append(format_winrate_chart(load_verify_records()))
         lines.append("```")
+    else:
+        lines.append("")
+        lines.append("**昨日选股表现：无（昨日未选股或无记录，暂无胜率）**")
 
     # 股票池：Markdown 表格（+新增 / ~~删除线~~ / 空格保留）
     added = changes.get("added", [])
@@ -447,14 +451,17 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
     cyb = [x for x in all_items if _is_cyb(x[1])]
 
     lines.append("")
-    lines.append(f"**股票池·主板（{len(main)} 只）：**")
-    lines.append("")
-    lines.extend(_pool_rows(main))
-    if cyb:
+    if total == 0:
+        lines.append("**股票池：空（暂无活跃标的）**")
+    else:
+        lines.append(f"**股票池·主板（{len(main)} 只）：**")
         lines.append("")
-        lines.append(f"**股票池·创业板/科创板（{len(cyb)} 只）：**")
-        lines.append("")
-        lines.extend(_pool_rows(cyb))
+        lines.extend(_pool_rows(main))
+        if cyb:
+            lines.append("")
+            lines.append(f"**股票池·创业板/科创板（{len(cyb)} 只）：**")
+            lines.append("")
+            lines.extend(_pool_rows(cyb))
 
     return "\n".join(lines)
 
