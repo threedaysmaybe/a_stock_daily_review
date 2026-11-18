@@ -447,6 +447,7 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
             sentiment["empty_reason"] = "外围风险"
         else:
             sentiment["empty_reason"] = "无个股通过门槛/打分"
+        daily_verify.record_empty_day(date, sentiment["empty_reason"], sentiment.get("level", ""))
 
     # 每日验证 + 动态股票池（验证前一日选股，更新股票池）
     verify = daily_verify.verify_prev_selection(date)
@@ -473,7 +474,11 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
     print(f"[股票池] 新增{len(changes['added'])} 移除{len(changes['removed'])} 保留{len(changes['kept'])}")
 
     # 合并推送文案：选股 + 昨日表现 + 胜率曲线 + 完整股票池
-    msg = daily_verify.format_daily_message(date, top, sentiment, verify, market_avg, changes)
+    _prev_date = daily_verify.prev_trading_day(date)
+    _none_reason = "" if verify is not None else daily_verify.get_empty_reason(_prev_date)
+    msg = daily_verify.format_daily_message(date, top, sentiment, verify, market_avg, changes,
+                                            verify_none_reason=_none_reason,
+                                            verify_none_date=_prev_date)
 
     # 因子健康度（direction×IC 有效值变化，作为最后一项）
     health = evolution.format_factor_health(

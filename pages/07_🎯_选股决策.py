@@ -355,9 +355,31 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
             "| 日经开盘 | 跌超 2% |"
         )
 
-    def _render_verify(verify: dict, market_avg):
+    def _render_verify(verify: dict, market_avg, date_str: str = ""):
         if not verify:
-            st.info("暂无昨日选股验证（首次运行或昨日无选股结果）。")
+            prev = stock_choose_main.prev_trading_day(date_str) if date_str else ""
+            reason = stock_choose_verify.get_empty_reason(prev) if prev else ""
+            if reason:
+                st.warning(f"{prev} 空仓（{reason}），今天没有可验证的股票，本次无胜率。")
+            else:
+                st.info("暂无昨日选股验证（首次运行、昨日空仓或昨日无记录）。")
+            recs = _load_verify_records()
+            if recs is not None and len(recs):
+                try:
+                    last = recs.iloc[-1]
+                    lw = float(last["胜率"])
+                    ln = int(float(last["总数"]))
+                    st.caption(
+                        f"📌 最近一次验证（{last['日期']} 验证 {last['前日']}）："
+                        f"胜率 {lw:.0%}（{int(lw * ln)}/{ln} 上涨），"
+                        f"组合 {float(last['组合涨幅']):+.2%}"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                chart = stock_choose_verify.format_winrate_chart(recs)
+                if chart and chart != "（暂无胜率记录）":
+                    with st.expander("📈 近15日胜率曲线"):
+                        st.code(chart)
             return
         win = verify.get("win_rate", 0)
         n = verify.get("n", 0)
@@ -405,12 +427,13 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
             st.markdown("#### 🧬 因子健康度（方向×IC）")
             st.markdown(health)
 
-    def _render_report(picks_df: pd.DataFrame, sent: dict, verify: dict, market_avg, health: str):
+    def _render_report(picks_df: pd.DataFrame, sent: dict, verify: dict, market_avg, health: str,
+                       date_str: str = ""):
         _render_sentiment(sent)
         _render_picks(picks_df)
         _render_thresholds()
         st.markdown("#### 📋 昨日选股表现")
-        _render_verify(verify, market_avg)
+        _render_verify(verify, market_avg, date_str)
         _render_watchlist()
         _render_health(health)
 
@@ -462,6 +485,7 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
             live.get("verify"),
             live.get("market_avg"),
             live.get("health") or "",
+            live.get("date") or date_str,
         )
     else:
         # 按所选日期展示：选股表/昨日表现从该日期文件读取；
@@ -474,7 +498,7 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
 
         if not len(picks):
             st.warning(f"{date_str} 暂无选股结果（可能休市、未跑或全部被过滤）。点「🔄 跑选股」可生成该日结果。")
-        _render_report(picks, sent, verify, market_avg, health)
+        _render_report(picks, sent, verify, market_avg, health, date_str)
 
 
 # ============================================================

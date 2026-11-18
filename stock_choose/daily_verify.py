@@ -19,6 +19,9 @@ from stock_choose.strategy.patterns import fetch_history
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
+# 空仓记录：记录每天为什么没选股，供次日推送/页面说明原因
+EMPTY_LOG = os.path.join(OUTPUT_DIR, "空仓记录.csv")
+
 # 淘汰参数默认值（可被 config.yaml 的 watchlist 段覆盖）
 WATCHLIST_DEFAULTS = {
     "excess_base": 0.03,          # 超额阈值基准（情绪差时：跑输大盘 3% 淘汰）
@@ -111,18 +114,28 @@ def get_today_prices(codes: list) -> dict:
 
 
 def get_market_avg() -> float:
-    """用缓存沪深300成分股算今日等权平均涨幅（大盘基准）。"""
-    import glob
-    files = glob.glob(os.path.join(BASE_DIR, "cache", "*.csv"))
-    rets = []
-    for f in files:
-        try:
-            df = pd.read_csv(f).tail(3)
-            if len(df) >= 2:
-                rets.append(df["close"].iloc[-1] / df["close"].iloc[-2] - 1)
-        except Exception:  # noqa: BLE001
-            pass
-    return float(np.mean(rets)) if rets else None
+    """大盘基准：沪深300指数最新交易日涨幅（真实收盘数据）。
+
+    旧实现读 cache/*.csv 成分股，但该缓存在 2026-08 之后就不再更新，
+    导致「大盘涨幅」长期恒为 -0.82%、超额收益全部失真。
+    改为直接取沪深300指数日线；取不到时返回 None（页面/推送会省略该行）。
+    """
+    try:
+        import akshare as ak
+        idx = ak.stock_zh_index_daily(symbol="sh000300")
+        closes = pd.to_numeric(idx["close"], errors="coerce").dropna()
+        if len(closes) >= 2:
+            return float(closes.iloc[-1] / closes.iloc[-2] - 1)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import akshare as ak
+        idx = ak.stock_zh_index_daily_em(symbol="sh000300")
+        closes = pd.to_numeric(idx["close"], errors="coerce").dropna()
+        if len(closes) >= 2:
+            return float(closes.iloc[-1] / closes.iloc[-2] - 1)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def load_watchlist() -> pd.DataFrame:
@@ -307,6 +320,38 @@ def load_verify_records() -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def record_empty_day(date_str: str, reason: str, level: str = ""):
+    """记录空仓日及原因（同一天重复跑覆盖旧行）。"""
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        df = pd.DataFrame(columns=["日期", "原因", "情绪"])
+        if os.path.exists(EMPTY_LOG):
+            try:
+                df = pd.read_csv(EMPTY_LOG)
+            except Exception:  # noqa: BLE001
+                pass
+        df = df[df["日期"].astype(str).str.strip() != date_str]
+        df.loc[len(df)] = [date_str, reason or "", level or ""]
+        df.to_csv(EMPTY_LOG, index=False, encoding="utf-8-sig")
+    except Exception:  # noqa: BLE001 —— 只读环境静默失败
+        pass
+
+
+def get_empty_reason(date_str: str) -> str:
+    """查某天的空仓原因（没有记录返回空字符串）。"""
+    if not date_str:
+        return ""
+    try:
+        if os.path.exists(EMPTY_LOG):
+            df = pd.read_csv(EMPTY_LOG)
+            row = df[df["日期"].astype(str).str.strip() == date_str]
+            if len(row):
+                return str(row.iloc[0].get("原因", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 def format_winrate_chart(records: pd.DataFrame, n: int = 15) -> str:
     """最近 n 个交易日的胜率 ASCII 柱状图（微信可直接显示，无需图床）。"""
     if records is None or records.empty:
@@ -333,7 +378,9 @@ def _fmt_ret(r) -> str:
 
 
 def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
-                         market_avg: float, changes: dict) -> str:
+                         market_avg: float, changes: dict,
+                         verify_none_reason: str = "",
+                         verify_none_date: str = "") -> str:
     """合并后的完整推送（Markdown 表格，微信可正确渲染）。"""
     up_ratio = sentiment.get("up_ratio")
     up_str = f"{up_ratio:.0%}" if up_ratio is not None else "N/A"
@@ -414,8 +461,33 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
         lines.append(format_winrate_chart(load_verify_records()))
         lines.append("```")
     else:
+        if verify_none_reason:
+            tip = f"（{verify_none_date} 空仓：{verify_none_reason}，无可验证股票）" if verify_none_date \
+                else f"（空仓：{verify_none_reason}，无可验证股票）"
+        else:
+            tip = "（昨日未选股或无记录）"
         lines.append("")
-        lines.append("**昨日选股表现：无（昨日未选股或无记录，暂无胜率）**")
+        lines.append(f"**昨日选股表现：无{tip}**")
+        # 仍然展示最近一次有效验证，避免"整段消失、什么都看不到"
+        recs = load_verify_records()
+        if recs is not None and len(recs):
+            try:
+                last = recs.iloc[-1]
+                lw = float(last["胜率"])
+                ln = int(float(last["总数"]))
+                lines.append("")
+                lines.append(
+                    f"最近一次验证（{last['日期']} 验证 {last['前日']}）："
+                    f"胜率 {lw:.0%}（{int(lw * ln)}/{ln} 上涨），"
+                    f"组合 {float(last['组合涨幅']):+.2%}"
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        lines.append("")
+        lines.append("**近15日胜率曲线：**")
+        lines.append("```")
+        lines.append(format_winrate_chart(recs))
+        lines.append("```")
 
     # 股票池：Markdown 表格（+新增 / ~~删除线~~ / 空格保留）
     added = changes.get("added", [])
