@@ -178,7 +178,11 @@ def remove_misjudged(prev_date: str, today: str) -> list:
 
 
 def verify_prev_selection(date_str: str) -> dict:
-    """验证上一个交易日选出的股票，返回 {prev_date, codes, rets, win_rate, avg_ret}。"""
+    """验证上一个交易日选出的股票，返回 {prev_date, codes, rets, win_rate, avg_ret, prev_is_observe}。
+
+    空仓日的候选也会记录（suggest_buy=False），照样参与验证，
+    这样胜率序列不断档，也能评估「避险空仓」是否真的躲过了下跌。
+    """
     prev = prev_trading_day(date_str)
     if prev is None:
         return None
@@ -187,6 +191,10 @@ def verify_prev_selection(date_str: str) -> dict:
         return None
     prev_df = pd.read_excel(prev_file)
     codes = prev_df["code"].tolist()
+    prev_observe = False
+    if "suggest_buy" in prev_df.columns and len(prev_df):
+        flags = prev_df["suggest_buy"].astype(str).str.strip().str.lower()
+        prev_observe = not flags.isin(["true", "1", "1.0"]).any()
     rets = get_today_returns(codes)
     arr = np.array([v for v in rets.values() if v is not None])
     if len(arr) == 0:
@@ -198,6 +206,7 @@ def verify_prev_selection(date_str: str) -> dict:
         "win_rate": float((arr > 0).mean()),
         "avg_ret": float(arr.mean()),
         "n": len(arr),
+        "prev_is_observe": prev_observe,
     }
 
 
@@ -294,6 +303,7 @@ def append_verify_record(date_str: str, verify: dict, market_avg: float):
     record = {
         "日期": date_str,
         "前日": verify["prev_date"],
+        "前日类型": "空仓观察" if verify.get("prev_is_observe") else "建仓",
         "胜率": round(verify["win_rate"], 4),
         "上涨数": int(verify["win_rate"] * verify["n"]),
         "总数": verify["n"],
@@ -305,6 +315,8 @@ def append_verify_record(date_str: str, verify: dict, market_avg: float):
     if os.path.exists(path):
         # 同一天重复跑：更新当天记录，而不是新增重复日期
         old = pd.read_csv(path)
+        if "前日类型" not in old.columns:
+            old["前日类型"] = "建仓"  # 历史记录统一按建仓口径
         old = old[old["日期"].astype(str) != date_str]
         df = pd.concat([old, df], ignore_index=True)
         df.to_csv(path, index=False, encoding="utf-8-sig")
@@ -428,11 +440,20 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
             code = str(row["code"]).split(".")[0]  # 去掉 .SZ/.SH 后缀
             lines.append(f"| {int(row['rank'])} | {row['name']} | {code} | {sign}{row['final_score']:.2f} | {pos} | {risk} |")
 
-    # 今日精选 Top20，分「主板」和「创业板/科创板」两组（空仓时跳过）
-    if top is None or len(top) == 0:
+    # 今日精选 Top20，分「主板」和「创业板/科创板」两组（空仓日改为观察名单）
+    _pos_n = int(sentiment.get("pos_n") or 0)
+    _is_empty_day = (top is None) or (len(top) == 0) or (_pos_n <= 0)
+    if _is_empty_day:
         reason = sentiment.get("empty_reason") or "未给出"
         lines.append("")
-        lines.append(f"**今日精选：空仓（{reason}），今日不选股**")
+        lines.append(f"**今日精选：空仓（{reason}），今日不建仓**")
+        if top is not None and len(top):
+            obs = "、".join(
+                f"{row['name']}({str(row['code']).split('.')[0]})"
+                for _, row in top.head(10).iterrows()
+            )
+            lines.append("")
+            lines.append(f"观察名单（仅记录，不建议买入，次日仍计入验证）：{obs}")
     else:
         top20 = top.head(20)
         is_cyb = top20["code"].astype(str).str.startswith(("300", "301", "688"))
@@ -446,7 +467,10 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
         win = verify["win_rate"]
         up = int(win * verify["n"])
         lines.append("")
-        lines.append(f"**昨日({verify['prev_date']})选股表现：**")
+        if verify.get("prev_is_observe"):
+            lines.append(f"**昨日({verify['prev_date']})空仓观察名单表现（若买入的假设收益）：**")
+        else:
+            lines.append(f"**昨日({verify['prev_date']})选股表现：**")
         lines.append("")
         lines.append("| 指标 | 数值 |")
         lines.append("|:---|:---:|")

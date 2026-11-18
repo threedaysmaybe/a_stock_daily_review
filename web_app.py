@@ -299,9 +299,15 @@ def index():
 
     picks_html = ""
     if df is not None and len(df):
+        _observe = False
+        if "suggest_buy" in df.columns:
+            _flags = df["suggest_buy"].astype(str).str.strip().str.lower()
+            _observe = not _flags.isin(["true", "1", "1.0"]).any()
         main_rows = _render_picks_table(df, is_cyb=False)
         cyb_rows = _render_picks_table(df, is_cyb=True)
-        picks_html = f"<div class='box'><h2>{title_date} 精选</h2>"
+        picks_html = f"<div class='box'><h2>{title_date} {'观察名单' if _observe else '精选'}</h2>"
+        if _observe:
+            picks_html += "<p class='warn'>空仓日：以下仅记录，不建议买入；次日仍计入胜率验证</p>"
         if main_rows:
             picks_html += ("<h3>主板</h3><table><tr><th>排名</th><th>名称</th><th>代码</th>"
                            "<th>得分</th><th>看多</th><th>风险</th></tr>" + main_rows + "</table>")

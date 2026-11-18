@@ -301,6 +301,21 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
   <p class="qcal-label">绿色=已有结果；日期选择用上方日期组件（切月/选日期都在那里）</p>
 </div>'''
 
+    @st.cache_data(ttl=300)
+    def _is_observe_day(date_str: str) -> bool:
+        """该日是否为空仓观察日（有候选记录但 suggest_buy=False）。"""
+        p = os.path.join(ENGINE_OUT, f"短期选股_{date_str.replace('-', '')}.xlsx")
+        if not os.path.exists(p):
+            return False
+        try:
+            df = pd.read_excel(p)
+            if "suggest_buy" not in df.columns or not len(df):
+                return False
+            flags = df["suggest_buy"].astype(str).str.strip().str.lower()
+            return not flags.isin(["true", "1", "1.0"]).any()
+        except Exception:
+            return False
+
     def _pick_cols(df: pd.DataFrame) -> pd.DataFrame:
         if df is None or not len(df):
             return pd.DataFrame()
@@ -319,14 +334,16 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
                 + ("；⚠️ 外围风险 → 空仓" if sent.get("overseas_risk") else "")
             )
 
-    def _render_picks(picks_df: pd.DataFrame):
+    def _render_picks(picks_df: pd.DataFrame, observe: bool = False):
         if not len(picks_df):
             st.warning("暂无选股结果（可能休市、空仓或全部被门槛过滤）。")
             return
+        if observe:
+            st.warning("空仓日：以下是「观察名单」，**不建议买入**；次日仍会计入胜率验证（用于评估避险判断是否有效）。")
         top1 = picks_df.iloc[0]
         signal_part = f"{top1['signal_score']:+.2f}" if pd.notna(top1.get("signal_score")) else ""
         conclusion(
-            f"首选：<b>{top1['name']}</b>（{top1['code'].split('.')[0]}）",
+            f"{'观察首选' if observe else '首选'}：<b>{top1['name']}</b>（{top1['code'].split('.')[0]}）",
             f"综合得分 <b>{top1['final_score']:.2f}</b>"
             + (f"（因子分 {top1['total_score']:.2f}，信号分 {signal_part}）" if signal_part else "")
             + f"，截面打分第 {int(top1['rank'])} 名。",
@@ -428,9 +445,9 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
             st.markdown(health)
 
     def _render_report(picks_df: pd.DataFrame, sent: dict, verify: dict, market_avg, health: str,
-                       date_str: str = ""):
+                       date_str: str = "", observe: bool = False):
         _render_sentiment(sent)
-        _render_picks(picks_df)
+        _render_picks(picks_df, observe)
         _render_thresholds()
         st.markdown("#### 📋 昨日选股表现")
         _render_verify(verify, market_avg, date_str)
@@ -486,6 +503,7 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
             live.get("market_avg"),
             live.get("health") or "",
             live.get("date") or date_str,
+            int((live.get("sentiment") or {}).get("pos_n") or 0) <= 0,
         )
     else:
         # 按所选日期展示：选股表/昨日表现从该日期文件读取；
@@ -498,7 +516,7 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
 
         if not len(picks):
             st.warning(f"{date_str} 暂无选股结果（可能休市、未跑或全部被过滤）。点「🔄 跑选股」可生成该日结果。")
-        _render_report(picks, sent, verify, market_avg, health, date_str)
+        _render_report(picks, sent, verify, market_avg, health, date_str, _is_observe_day(date_str))
 
 
 # ============================================================

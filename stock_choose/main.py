@@ -237,9 +237,16 @@ def run_short(cfg: dict, date: str, push: bool = True):
     sentiment["overseas_risk"] = risk
     sentiment["overseas"] = overseas_sig
 
-    # 仓位管理：外围风险→空仓，否则情绪→持仓数量（强20、中性10、弱5）
+    # 仓位管理：外围风险→空仓（只记录候选，不建仓），否则情绪→持仓数量（强20、中性10、弱5）
     pos_n = 0 if risk else position_size(sentiment["level"])
-    top = top.head(pos_n)
+    sentiment["pos_n"] = pos_n
+    if pos_n > 0:
+        top = top.head(pos_n)
+    else:
+        # 空仓日：不截断，保留完整候选作为「观察记录」（次日仍参与胜率验证），
+        # 但不建议买入、也不进股票池
+        top = top.head(top_n)
+    top["suggest_buy"] = pos_n > 0
     if len(top):
         top["rank"] = top["final_score"].rank(ascending=False, method="first").astype(int)
 
@@ -441,8 +448,10 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
     import json
     top, sentiment = run_short(cfg, date)
 
-    # 空仓原因（推送里说明为什么没选股）
-    if top is None or len(top) == 0:
+    # 空仓判定：仓位 0（外围风险）或无候选通过门槛
+    _pos_n = int(sentiment.get("pos_n") or 0)
+    _top_len = 0 if top is None else len(top)
+    if _pos_n <= 0 or _top_len == 0:
         if sentiment.get("overseas_risk"):
             sentiment["empty_reason"] = "外围风险"
         else:
@@ -459,9 +468,10 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
     else:
         print("[验证] 无上一交易日选股结果，跳过（首次运行或昨日空仓）")
 
-    # 股票池更新独立于验证：今天有选股就加入，池子里的弱股照常淘汰（空仓日也淘汰）
+    # 股票池更新独立于验证：今天有「建议建仓」的票就加入，池子里的弱股照常淘汰（空仓日也淘汰）
     names = dict(zip(top["code"], top["name"])) if top is not None and len(top) else {}
-    today_codes = top["code"].tolist() if top is not None and len(top) else []
+    today_codes = (top["code"].tolist()
+                   if (top is not None and len(top) and _pos_n > 0) else [])
     changes = daily_verify.update_watchlist(date, today_codes, names,
                                              up_ratio=sentiment.get("up_ratio"),
                                              market_avg=market_avg)
