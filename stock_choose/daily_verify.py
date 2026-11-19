@@ -448,14 +448,86 @@ def _empty_day_set() -> set:
     return days
 
 
-def _last_trading_day_on_or_before(date_str: str) -> str:
-    """<= date_str 的最近交易日。"""
-    dt = datetime.strptime(date_str, "%Y-%m-%d")
-    for i in range(0, 40):
-        d = (dt - timedelta(days=i)).strftime("%Y-%m-%d")
-        if _is_trading_day(d):
-            return d
-    return date_str
+def _rate_emoji(win: float) -> str:
+    if win >= 0.8:
+        return "🟩"
+    if win >= 0.5:
+        return "🟨"
+    return "🟥"
+
+
+def format_winrate_mobile(records: pd.DataFrame, until: str = None) -> str:
+    """微信用的胜率视图（单列，逐日一行）。
+
+    微信不是等宽字体：█░▁━ 每个字形宽度不同、中文与数字也不同，
+    两列并排一定错位。这里改用固定宽度 emoji 当标记，每行结构完全一致，
+    所以日期和文字在任何手机上都能对齐。
+
+    标记含义：
+      🟩/🟨/🟥  胜率 ≥80% / 50~79% / <50%
+      ⬜  没有胜率（前一日空仓，无可验证股票）
+      ⬛  没有胜率（当日没跑选股）
+      🏖  休市（周末/节假日）
+    """
+    if records is None or records.empty:
+        return "（暂无胜率记录）"
+    recs = records.copy()
+    recs["日期"] = recs["日期"].astype(str).str.strip()
+    by_date = {r["日期"]: r for _, r in recs.iterrows()}
+    empty_days = _empty_day_set()
+
+    last = (until or recs["日期"].max()).strip()
+    end_dt = datetime.strptime(last, "%Y-%m-%d")
+    cur_y, cur_m = end_dt.year, end_dt.month
+    prev_y, prev_m = (cur_y - 1, 12) if cur_m == 1 else (cur_y, cur_m - 1)
+
+    def one_line(ds):
+        key = ds[5:]
+        row = by_date.get(ds)
+        if not _is_trading_day(ds):
+            return f"{key} 🏖 休市"
+        if row is not None:
+            win = pd.to_numeric(row.get("胜率"), errors="coerce")
+            if pd.isna(win):
+                note = str(row.get("说明") or "")
+                return f"{key} ⬜ 没有胜率（" + ("前日空仓" if "空仓" in note else "无票") + "）"
+            win = float(win)
+            obs = "（空仓观察）" if str(row.get("前日类型") or "").strip() == "空仓观察" else ""
+            return f"{key} {_rate_emoji(win)} {win:.0%}{obs}"
+        prev = prev_trading_day(ds)
+        if prev and prev in empty_days:
+            return f"{key} ⬜ 没有胜率（前日空仓）"
+        return f"{key} ⬛ 没有胜率（当日未跑）"
+
+    lines = []
+    for (yy, mm, title) in ((prev_y, prev_m, "上月"), (cur_y, cur_m, "本月")):
+        lines.append(f"【{title} {mm}月】")
+        for ds in _month_days(yy, mm, last):
+            lines.append(one_line(ds))
+        lines.append("")
+
+    # 年内更早交易日：只给平均胜率（空仓/未跑不计入）
+    earlier_start = f"{cur_y:04d}-01-01"
+    earlier_end = f"{prev_y:04d}-{prev_m:02d}-01"
+    wins = []
+    for ds, row in by_date.items():
+        if earlier_start <= ds < earlier_end:
+            w = pd.to_numeric(row.get("胜率"), errors="coerce")
+            if not pd.isna(w):
+                wins.append(float(w))
+    earlier_end_disp = (datetime(prev_y, prev_m, 1) - timedelta(days=1)).strftime("%Y-%m-%d")
+    if wins:
+        avg = sum(wins) / len(wins)
+        up = sum(1 for w in wins if w >= 0.5)
+        lines.append(
+            f"本年更早交易日（{earlier_start} ~ {earlier_end_disp}）平均胜率：{avg:.0%}"
+            f"（{len(wins)} 个交易日有胜率，{up} 天过半上涨）"
+        )
+    else:
+        lines.append(
+            f"本年更早交易日（{earlier_start} ~ {earlier_end_disp}）：没有胜率（无有效记录）"
+        )
+    return "\n".join(lines)
 
 
 BLOCK_W = 2  # █░ 在中文字体/微信里按全角 2 格渲染
@@ -716,10 +788,8 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
             lines.append(f"| 大盘涨幅 | {market_avg:+.2%} |")
             lines.append(f"| 超额 | {verify['avg_ret'] - market_avg:+.2%} |")
         lines.append("")
-        lines.append("**胜率（上月 / 本月，* = 空仓观察）：**")
-        lines.append("```")
-        lines.append(format_winrate_chart(load_verify_records(), until=date_str))
-        lines.append("```")
+        lines.append("**胜率（上月 / 本月）：**")
+        lines.append(format_winrate_mobile(load_verify_records(), until=date_str))
     else:
         if verify_none_reason:
             tip = f"（{verify_none_date} 空仓：{verify_none_reason}，无可验证股票）" if verify_none_date \
@@ -744,10 +814,8 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
             except Exception:  # noqa: BLE001
                 pass
         lines.append("")
-        lines.append("**胜率（上月 / 本月，* = 空仓观察）：**")
-        lines.append("```")
-        lines.append(format_winrate_chart(recs, until=date_str))
-        lines.append("```")
+        lines.append("**胜率（上月 / 本月）：**")
+        lines.append(format_winrate_mobile(recs, until=date_str))
 
     # 股票池：Markdown 表格（+新增 / ~~删除线~~ / 空格保留）
     added = changes.get("added", [])
