@@ -420,9 +420,9 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
                         )
                     except Exception:  # noqa: BLE001
                         pass
-                chart = stock_choose_verify.format_winrate_chart(recs)
+                chart = stock_choose_verify.format_winrate_chart(recs, until=date_str or None)
                 if chart and chart != "（暂无胜率记录）":
-                    with st.expander("📈 近15日胜率曲线"):
+                    with st.expander("📈 近15个交易日胜率（含休市日）"):
                         st.code(chart)
             return
         win = verify.get("win_rate", 0)
@@ -434,9 +434,9 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
         if market_avg is not None:
             c3.metric("大盘涨幅", f"{market_avg:+.2%}")
             c4.metric("超额", f"{verify.get('avg_ret', 0) - market_avg:+.2%}")
-        chart = stock_choose_verify.format_winrate_chart(_load_verify_records())
+        chart = stock_choose_verify.format_winrate_chart(_load_verify_records(), until=date_str or None)
         if chart and chart != "（暂无胜率记录）":
-            with st.expander("📈 近15日胜率曲线"):
+            with st.expander("📈 近15个交易日胜率（含休市日）"):
                 st.code(chart)
 
     def _render_watchlist():
