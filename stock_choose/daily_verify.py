@@ -458,15 +458,56 @@ def _last_trading_day_on_or_before(date_str: str) -> str:
     return date_str
 
 
-def format_winrate_chart(records: pd.DataFrame, n: int = 30, until: str = None) -> str:
-    """胜率时间轴（微信可直接显示）：最近 n 个交易日 + 期间休市日。
+def _disp_width(s: str) -> int:
+    """显示宽度（中文算 2 格），用于等宽对齐。"""
+    return sum(2 if ord(ch) > 0x2E80 else 1 for ch in s)
 
-    每行含义：
-      ██████░░░░ 60%           正常建仓日：胜率
-      ██████░░░░ 60%（空仓观察） 前一日空仓，候选按"假设买入"验证
-      ────────── 无胜率（前日空仓） 该日无可验证股票
-      ────────── 无记录（当日未跑） 该日没有跑过选股
-      ·········· 休市            周末/节假日
+
+def _pad(s: str, width: int) -> str:
+    return s + " " * max(0, width - _disp_width(s))
+
+
+def _day_cell(ds: str, row, empty_days: set) -> str:
+    """单日结果单元格文本。"""
+    key = ds[5:]
+    if row is not None:
+        win = pd.to_numeric(row.get("胜率"), errors="coerce")
+        if not pd.isna(win):
+            win = float(win)
+            bar_len = int(win * 5 + 0.5)
+            bar = "█" * bar_len + "░" * (5 - bar_len)
+            tag = "*" if str(row.get("前日类型") or "").strip() == "空仓观察" else ""
+            return f"{key} {bar} {win:.0%}{tag}"
+        note = str(row.get("说明") or "")
+        return f"{key} 没有胜率(" + ("空仓" if "空仓" in note else "无票") + ")"
+    prev = prev_trading_day(ds)
+    if prev and prev in empty_days:
+        return f"{key} 没有胜率(空仓)"
+    return f"{key} 没有胜率(未跑)"
+
+
+def _month_days(year: int, month: int, until: str) -> list:
+    """某月要显示的日期列表（自然日，截止到 until；未来日期不显示）。"""
+    import calendar as _cal
+    end_day = _cal.monthrange(year, month)[1]
+    out = []
+    for day in range(1, end_day + 1):
+        ds = f"{year:04d}-{month:02d}-{day:02d}"
+        if ds > until:
+            break
+        out.append(ds)
+    return out
+
+
+def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None) -> str:
+    """胜率展示：上个月 / 本月 两列对照 + 年内更早交易日的平均胜率。
+
+    单元格含义：
+      11-16 ████░ 80%     正常建仓日胜率
+      11-20 ███░░ 60%*    前一日空仓（观察名单按"假设买入"验证，* 标注）
+      11-03 没有胜率(空仓) 无可验证股票
+      11-09 没有胜率(未跑) 当日没跑选股
+      11-07 休市          周末/节假日
     """
     if records is None or records.empty:
         return "（暂无胜率记录）"
@@ -475,43 +516,50 @@ def format_winrate_chart(records: pd.DataFrame, n: int = 30, until: str = None) 
     by_date = {r["日期"]: r for _, r in recs.iterrows()}
     empty_days = _empty_day_set()
 
-    last = (until or (recs["日期"].max())).strip()
-    cal = _trade_day_set()
-    if cal:
-        tds = sorted(d for d in cal if d <= last)
-    else:
-        tds = sorted(d for d in by_date if _is_trading_day(d))
-    window = tds[-n:] if tds else sorted(by_date)[-n:]
-    if not window:
-        return "（暂无胜率记录）"
+    last = (until or recs["日期"].max()).strip()
+    end_dt = datetime.strptime(last, "%Y-%m-%d")
+    cur_y, cur_m = end_dt.year, end_dt.month
+    prev_y, prev_m = (cur_y - 1, 12) if cur_m == 1 else (cur_y, cur_m - 1)
 
-    lines = []
-    d = datetime.strptime(window[0], "%Y-%m-%d")
-    end = datetime.strptime(last, "%Y-%m-%d")
-    while d <= end:
-        ds, key = d.strftime("%Y-%m-%d"), d.strftime("%m-%d")
-        row = by_date.get(ds)
-        win = None
-        if row is not None:
-            win = pd.to_numeric(row.get("胜率"), errors="coerce")
-            win = None if pd.isna(win) else float(win)
+    left = _month_days(prev_y, prev_m, last)
+    right = _month_days(cur_y, cur_m, last)
+
+    def cell(ds):
         if not _is_trading_day(ds):
-            lines.append(f"{key} {'·' * 10} 休市")
-        elif row is not None and win is not None:
-            bar_len = int(win * 10 + 0.5)
-            bar = "█" * bar_len + "░" * (10 - bar_len)
-            tag = "（空仓观察）" if str(row.get("前日类型") or "").strip() == "空仓观察" else ""
-            lines.append(f"{key} {bar} {win:.0%}{tag}")
-        elif row is not None:
-            note = str(row.get("说明") or "")
-            lines.append(f"{key} {'─' * 10} " + ("无胜率（前日空仓）" if "空仓" in note else "无胜率"))
-        else:
-            prev = prev_trading_day(ds)
-            if prev and prev in empty_days:
-                lines.append(f"{key} {'─' * 10} 无胜率（前日空仓·历史未统计）")
-            else:
-                lines.append(f"{key} {'─' * 10} 无记录（当日未跑）")
-        d += timedelta(days=1)
+            return f"{ds[5:]} 休市"
+        return _day_cell(ds, by_date.get(ds), empty_days)
+
+    cell_w = 22
+    head = _pad(f"{prev_m}月", cell_w) + _pad(f"{cur_m}月", cell_w).rstrip()
+    lines = [head, _pad("─" * 8, cell_w) + "─" * 8]
+    for i in range(max(len(left), len(right))):
+        a = cell(left[i]) if i < len(left) else ""
+        b = cell(right[i]) if i < len(right) else ""
+        lines.append((_pad(a, cell_w) + b).rstrip())
+
+    # 年内更早交易日（上月之前）：只给平均胜率，没跑/空仓不计入
+    earlier_start = f"{cur_y:04d}-01-01"
+    earlier_end = f"{prev_y:04d}-{prev_m:02d}-01"
+    wins = []
+    for ds, row in by_date.items():
+        if earlier_start <= ds < earlier_end:
+            w = pd.to_numeric(row.get("胜率"), errors="coerce")
+            if not pd.isna(w):
+                wins.append(float(w))
+    lines.append("")
+    lines.append("* = 空仓观察日（按假设买入验证）")
+    earlier_end_disp = (datetime(prev_y, prev_m, 1) - timedelta(days=1)).strftime("%Y-%m-%d")
+    if wins:
+        avg = sum(wins) / len(wins)
+        up = sum(1 for w in wins if w >= 0.5)
+        lines.append(
+            f"本年更早交易日（{earlier_start} ~ {earlier_end_disp}）平均胜率：{avg:.0%}"
+            f"（{len(wins)} 个交易日有胜率，{up} 天过半上涨）"
+        )
+    else:
+        lines.append(
+            f"本年更早交易日（{earlier_start} ~ {earlier_end_disp}）：没有胜率（无有效记录）"
+        )
     return "\n".join(lines)
 
 
@@ -617,7 +665,7 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
             lines.append(f"| 大盘涨幅 | {market_avg:+.2%} |")
             lines.append(f"| 超额 | {verify['avg_ret'] - market_avg:+.2%} |")
         lines.append("")
-        lines.append("**近30个交易日胜率（含休市日）：**")
+        lines.append("**胜率（上月 / 本月，* = 空仓观察）：**")
         lines.append("```")
         lines.append(format_winrate_chart(load_verify_records(), until=date_str))
         lines.append("```")
@@ -645,7 +693,7 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
             except Exception:  # noqa: BLE001
                 pass
         lines.append("")
-        lines.append("**近30个交易日胜率（含休市日）：**")
+        lines.append("**胜率（上月 / 本月，* = 空仓观察）：**")
         lines.append("```")
         lines.append(format_winrate_chart(recs, until=date_str))
         lines.append("```")
