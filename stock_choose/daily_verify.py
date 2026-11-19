@@ -789,7 +789,9 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
             lines.append(f"| 超额 | {verify['avg_ret'] - market_avg:+.2%} |")
         lines.append("")
         lines.append("**胜率（上月 / 本月）：**")
+        lines.append("```")
         lines.append(format_winrate_mobile(load_verify_records(), until=date_str))
+        lines.append("```")
     else:
         if verify_none_reason:
             tip = f"（{verify_none_date} 空仓：{verify_none_reason}，无可验证股票）" if verify_none_date \
@@ -815,7 +817,9 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
                 pass
         lines.append("")
         lines.append("**胜率（上月 / 本月）：**")
+        lines.append("```")
         lines.append(format_winrate_mobile(recs, until=date_str))
+        lines.append("```")
 
     # 股票池：Markdown 表格（+新增 / ~~删除线~~ / 空格保留）
     added = changes.get("added", [])
