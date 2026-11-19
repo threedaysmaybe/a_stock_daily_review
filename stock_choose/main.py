@@ -462,11 +462,17 @@ def run_daily_pipeline(cfg: dict, date: str, push: bool = False) -> dict:
     verify = daily_verify.verify_prev_selection(date)
     market_avg = daily_verify.get_market_avg()
     changes = {"added": [], "kept": [], "removed": []}
+    _prev = daily_verify.prev_trading_day(date)
     if verify is not None:
         daily_verify.append_verify_record(date, verify, market_avg)
         print(f"[验证] 昨日({verify['prev_date']})胜率 {verify['win_rate']:.0%}")
     else:
-        print("[验证] 无上一交易日选股结果，跳过（首次运行或昨日空仓）")
+        # 无验证日也留痕：写明原因（前一日空仓/无结果文件），胜率留空
+        _reason = daily_verify.get_empty_reason(_prev) if _prev else ""
+        _note = (f"前日({_prev})空仓：{_reason}，无可验证股票，无胜率"
+                 if _reason else "前一日无选股结果（空仓或未跑），无胜率")
+        daily_verify.append_verify_record(date, None, None, note=_note, prev_date=_prev or "")
+        print(f"[验证] 无昨日选股结果，已记录说明：{_note}")
 
     # 股票池更新独立于验证：今天有「建议建仓」的票就加入，池子里的弱股照常淘汰（空仓日也淘汰）
     names = dict(zip(top["code"], top["name"])) if top is not None and len(top) else {}

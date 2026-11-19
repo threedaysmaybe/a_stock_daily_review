@@ -117,15 +117,27 @@ def _verify_for_date(date_str: str):
 
     def _f(v):
         try:
-            return float(v)
+            if v is None or str(v).strip() in ("", "nan", "None"):
+                return None
+            fv = float(v)
+            return None if fv != fv else fv
         except Exception:  # noqa: BLE001
             return None
 
+    win = _f(r.get("胜率"))
+    if win is None:
+        return {
+            "prev_date": str(r.get("前日", "")),
+            "win_rate": None,
+            "note": str(r.get("说明") or "").strip(),
+        }, None
+
     verify = {
         "prev_date": str(r.get("前日", "")),
-        "win_rate": _f(r.get("胜率")) or 0.0,
+        "win_rate": win,
         "n": int(_f(r.get("总数")) or 0),
         "avg_ret": _f(r.get("组合涨幅")) or 0.0,
+        "prev_is_observe": str(r.get("前日类型") or "").strip() == "空仓观察",
     }
     market_avg = _f(r.get("大盘涨幅"))
     return verify, market_avg
@@ -185,6 +197,10 @@ def _render_sentiment(sentiment):
 def _render_verify(verify, market_avg=None):
     if not verify:
         return ""
+    if verify.get("win_rate") is None:
+        note = verify.get("note") or "前一日无选股结果（空仓或未跑），无胜率"
+        return (f"<div class='box'><h2>昨日({verify.get('prev_date', '')})选股表现</h2>"
+                f"<p class='warn'>{note}</p></div>")
     win = verify.get("win_rate", 0) or 0
     up = int(win * (verify.get("n", 0) or 0))
     avg = verify.get("avg_ret", 0) or 0
@@ -192,7 +208,8 @@ def _render_verify(verify, market_avg=None):
     excess = (avg - mkt) if mkt is not None else None
     mkt_s = f"{mkt:+.2%}" if mkt is not None else "N/A"
     excess_s = f"{excess:+.2%}" if excess is not None else "N/A"
-    return (f"<div class='box'><h2>昨日({verify.get('prev_date','')})选股表现</h2>"
+    _title = "空仓观察名单表现（假设收益）" if verify.get("prev_is_observe") else "选股表现"
+    return (f"<div class='box'><h2>昨日({verify.get('prev_date','')}){_title}</h2>"
             f"<table><tr><th>胜率</th><th>上涨数</th><th>总数</th><th>组合</th><th>大盘</th><th>超额</th></tr>"
             f"<tr><td>{win:.0%}</td><td>{up}</td><td>{verify.get('n','')}</td>"
             f"<td>{avg:+.2%}</td><td>{mkt_s}</td><td>{excess_s}</td></tr></table></div>")

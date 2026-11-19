@@ -297,26 +297,48 @@ def update_watchlist(date_str: str, today_codes: list, today_names: dict, up_rat
     return {"added": added, "removed": removed, "kept": kept, "watchlist_df": wl}
 
 
-def append_verify_record(date_str: str, verify: dict, market_avg: float):
-    """追加一行验证记录。"""
+def append_verify_record(date_str: str, verify: dict, market_avg: float, note: str = "",
+                         prev_date: str = ""):
+    """追加一行验证记录。
+
+    verify 为 None 时（前一日空仓/无结果文件）也写一行：胜率等留空、写明说明，
+    这样「验证记录」和「胜率曲线」里不会出现无解释的缺口。
+    """
     path = os.path.join(OUTPUT_DIR, "验证记录.csv")
-    record = {
-        "日期": date_str,
-        "前日": verify["prev_date"],
-        "前日类型": "空仓观察" if verify.get("prev_is_observe") else "建仓",
-        "胜率": round(verify["win_rate"], 4),
-        "上涨数": int(verify["win_rate"] * verify["n"]),
-        "总数": verify["n"],
-        "组合涨幅": round(verify["avg_ret"], 4),
-        "大盘涨幅": round(market_avg, 4) if market_avg is not None else "",
-        "超额": round(verify["avg_ret"] - market_avg, 4) if market_avg is not None else "",
-    }
+    if verify is None:
+        record = {
+            "日期": date_str,
+            "前日": prev_date,
+            "前日类型": "无验证",
+            "胜率": "",
+            "上涨数": "",
+            "总数": "",
+            "组合涨幅": "",
+            "大盘涨幅": "",
+            "超额": "",
+            "说明": note or "前一日无选股结果（空仓或未跑），无胜率",
+        }
+    else:
+        record = {
+            "日期": date_str,
+            "前日": verify["prev_date"],
+            "前日类型": "空仓观察" if verify.get("prev_is_observe") else "建仓",
+            "胜率": round(verify["win_rate"], 4),
+            "上涨数": int(verify["win_rate"] * verify["n"]),
+            "总数": verify["n"],
+            "组合涨幅": round(verify["avg_ret"], 4),
+            "大盘涨幅": round(market_avg, 4) if market_avg is not None else "",
+            "超额": round(verify["avg_ret"] - market_avg, 4) if market_avg is not None else "",
+            "说明": "",
+        }
     df = pd.DataFrame([record])
     if os.path.exists(path):
         # 同一天重复跑：更新当天记录，而不是新增重复日期
         old = pd.read_csv(path)
         if "前日类型" not in old.columns:
             old["前日类型"] = "建仓"  # 历史记录统一按建仓口径
+        if "说明" not in old.columns:
+            old["说明"] = ""
         old = old[old["日期"].astype(str) != date_str]
         df = pd.concat([old, df], ignore_index=True)
         df.to_csv(path, index=False, encoding="utf-8-sig")
@@ -327,9 +349,13 @@ def append_verify_record(date_str: str, verify: dict, market_avg: float):
 def load_verify_records() -> pd.DataFrame:
     """读验证记录（用于画胜率曲线）。"""
     path = os.path.join(OUTPUT_DIR, "验证记录.csv")
-    if os.path.exists(path):
-        return pd.read_csv(path)
-    return pd.DataFrame()
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    for col, default in (("前日类型", "建仓"), ("说明", "")):
+        if col not in df.columns:
+            df[col] = default
+    return df
 
 
 def record_empty_day(date_str: str, reason: str, level: str = ""):
@@ -365,13 +391,25 @@ def get_empty_reason(date_str: str) -> str:
 
 
 def format_winrate_chart(records: pd.DataFrame, n: int = 15) -> str:
-    """最近 n 个交易日的胜率 ASCII 柱状图（微信可直接显示，无需图床）。"""
+    """最近 n 个交易日的胜率 ASCII 柱状图（微信可直接显示，无需图床）。
+
+    「无验证日」（前一日空仓/无结果）也占一行，用横线和原因标注，
+    避免曲线上出现无解释的缺口。
+    """
     if records is None or records.empty:
         return "（暂无胜率记录）"
     recent = records.tail(n)
     lines = []
     for _, row in recent.iterrows():
-        win = float(row["胜率"])
+        try:
+            win = float(row.get("胜率"))
+            if win != win:  # NaN
+                raise ValueError
+        except Exception:  # noqa: BLE001
+            note = str(row.get("说明") or "").strip()
+            short = "前日空仓·无胜率" if "空仓" in note else "无验证"
+            lines.append(f"{str(row['日期'])[-5:]} {'─' * 10} {short}")
+            continue
         bar_len = int(win * 10 + 0.5)  # 四舍五入到整数格
         bar = "█" * bar_len + "░" * (10 - bar_len)
         lines.append(f"{str(row['日期'])[-5:]} {bar} {win:.0%}")

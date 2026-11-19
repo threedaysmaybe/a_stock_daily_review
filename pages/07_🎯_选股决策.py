@@ -103,9 +103,13 @@ with tab_quant:
         if not os.path.exists(p):
             return pd.DataFrame()
         try:
-            return pd.read_csv(p)
+            df = pd.read_csv(p)
         except Exception:
             return pd.DataFrame()
+        for _col, _default in (("前日类型", "建仓"), ("说明", "")):
+            if _col not in df.columns:
+                df[_col] = _default
+        return df
 
     @st.cache_data(ttl=3600)
     def _get_engine_cfg() -> dict:
@@ -239,15 +243,28 @@ with tab_quant:
 
         def _f(v):
             try:
-                return float(v)
+                if v is None or str(v).strip() in ("", "nan", "None"):
+                    return None
+                fv = float(v)
+                return None if fv != fv else fv
             except Exception:
                 return None
 
+        win = _f(r.get("胜率"))
+        if win is None:
+            # 无验证日（前一日空仓/未跑）：返回说明，不伪造 0% 胜率
+            return {
+                "note": str(r.get("说明") or "").strip(),
+                "prev_date": str(r.get("前日") or "").strip(),
+                "win_rate": None,
+            }, None
+
         verify = {
             "prev_date": str(r.get("前日", "")),
-            "win_rate": _f(r.get("胜率")) or 0.0,
+            "win_rate": win,
             "n": int(_f(r.get("总数")) or 0),
             "avg_ret": _f(r.get("组合涨幅")) or 0.0,
+            "prev_is_observe": str(r.get("前日类型") or "").strip() == "空仓观察",
         }
         market_avg = _f(r.get("大盘涨幅"))
         return verify, market_avg
@@ -373,26 +390,36 @@ font-size:12px;border:1px solid #334155;color:#E2E8F0}}
         )
 
     def _render_verify(verify: dict, market_avg, date_str: str = ""):
-        if not verify:
-            prev = stock_choose_main.prev_trading_day(date_str) if date_str else ""
-            reason = stock_choose_verify.get_empty_reason(prev) if prev else ""
-            if reason:
-                st.warning(f"{prev} 空仓（{reason}），今天没有可验证的股票，本次无胜率。")
+        if not verify or verify.get("win_rate") is None:
+            note = (verify or {}).get("note") or ""
+            prev = (verify or {}).get("prev_date") or (
+                stock_choose_main.prev_trading_day(date_str) if date_str else "")
+            if note:
+                st.warning(f"{date_str} 无胜率：{note}")
+            elif prev:
+                reason = stock_choose_verify.get_empty_reason(prev)
+                if reason:
+                    st.warning(f"{prev} 空仓（{reason}），该日无可验证股票，无胜率。")
+                else:
+                    st.info("暂无昨日选股验证（首次运行、昨日空仓或昨日无记录）。")
             else:
                 st.info("暂无昨日选股验证（首次运行、昨日空仓或昨日无记录）。")
             recs = _load_verify_records()
             if recs is not None and len(recs):
-                try:
-                    last = recs.iloc[-1]
-                    lw = float(last["胜率"])
-                    ln = int(float(last["总数"]))
-                    st.caption(
-                        f"📌 最近一次验证（{last['日期']} 验证 {last['前日']}）："
-                        f"胜率 {lw:.0%}（{int(lw * ln)}/{ln} 上涨），"
-                        f"组合 {float(last['组合涨幅']):+.2%}"
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
+                # 取最近一条「有胜率」的记录，避免读到无验证占位行
+                _valid = recs[pd.to_numeric(recs["胜率"], errors="coerce").notna()]
+                if len(_valid):
+                    try:
+                        last = _valid.iloc[-1]
+                        lw = float(last["胜率"])
+                        ln = int(float(last["总数"]))
+                        st.caption(
+                            f"📌 最近一次有效验证（{last['日期']} 验证 {last['前日']}）："
+                            f"胜率 {lw:.0%}（{int(lw * ln)}/{ln} 上涨），"
+                            f"组合 {float(last['组合涨幅']):+.2%}"
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 chart = stock_choose_verify.format_winrate_chart(recs)
                 if chart and chart != "（暂无胜率记录）":
                     with st.expander("📈 近15日胜率曲线"):
