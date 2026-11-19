@@ -462,8 +462,8 @@ BLOCK_W = 2  # █░ 在中文字体/微信里按全角 2 格渲染
 
 
 def _is_block(ch: str) -> bool:
-    """方块元素（█░▓▒ 等），宽度随字体变化，单独处理。"""
-    return 0x2580 <= ord(ch) <= 0x259F
+    """方块/制表符（█░▁━ 等），宽度随字体变化，单独处理。"""
+    return 0x2500 <= ord(ch) <= 0x25FF
 
 
 def _disp_width(s: str, block_w: int = BLOCK_W) -> int:
@@ -576,13 +576,15 @@ def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None
     def cell(ds):
         return _day_cell(ds, by_date.get(ds), empty_days, block_w)
 
-    head = _pad(f"{prev_m}月", cw, block_w) + " " + f"{cur_m}月"
-    sep = "=" * (cw * 2 + 1)
-    lines = [head, sep]
+    # 不用表头行（表头没有方块柱，字体宽度不同会导致错位），改用行尾图例说明月份
+    lines = ["=" * 46]
     for i in range(max(len(left), len(right))):
-        a = cell(left[i]) if i < len(left) else " " * cw
-        b = cell(right[i]) if i < len(right) else ""
-        lines.append((_pad(a, cw, block_w) + " " + b).rstrip())
+        if i < len(left) and i < len(right):
+            lines.append((cell(left[i]) + "   " + cell(right[i])).rstrip())
+        elif i < len(left):
+            lines.append(cell(left[i]).rstrip())
+        else:
+            lines.append(cell(right[i]).rstrip())
 
     # 年内更早交易日（上月之前）：只给平均胜率，没跑/空仓不计入
     earlier_start = f"{cur_y:04d}-01-01"
@@ -594,6 +596,7 @@ def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None
             if not pd.isna(w):
                 wins.append(float(w))
     lines.append("")
+    lines.append(f"左列 {prev_m}月　右列 {cur_m}月（本月）")
     lines.append("███░░ 胜率　* =空仓观察日（按假设买入验证）")
     lines.append("░░░░░ 没有胜率(前日空仓)　▁▁▁▁▁ 没有胜率(当日未跑)　━━━━━ 没有胜率(休市)")
     earlier_end_disp = (datetime(prev_y, prev_m, 1) - timedelta(days=1)).strftime("%Y-%m-%d")
