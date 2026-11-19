@@ -459,39 +459,52 @@ def _last_trading_day_on_or_before(date_str: str) -> str:
 
 
 def _disp_width(s: str) -> int:
-    """显示宽度（中文算 2 格），用于等宽对齐。"""
+    """显示宽度（中文/全角算 2 格），用于等宽对齐。"""
     return sum(2 if ord(ch) > 0x2E80 else 1 for ch in s)
 
 
 def _pad(s: str, width: int) -> str:
+    """右侧补空格到指定显示宽度。"""
     return s + " " * max(0, width - _disp_width(s))
 
 
-CELL_W = 18  # 单元格显示宽度（中文按 2 格）
+def _rpad(s: str, width: int) -> str:
+    """左侧补空格到指定显示宽度（右对齐）。"""
+    return " " * max(0, width - _disp_width(s)) + s
+
+
+BAR_W = 5       # 柱宽（ASCII：# 实心 / - 空心，任何字体都是 1 格）
+TEXT_W = 8      # 文本列宽（"没有胜率" = 4 个汉字 = 8 格，最宽者）
+CELL_W = 5 + 1 + BAR_W + 1 + TEXT_W  # 日期 + 空格 + 柱 + 空格 + 文本 = 20
 
 
 def _day_cell(ds: str, row, empty_days: set) -> str:
-    """单日结果单元格：「MM-DD ███░░ 60%」；无胜率时也保留灰色格子。"""
+    """单日单元格：`MM-DD ###--   60%`，文本右对齐到最宽（没有胜率也显示）。
+
+    柱的含义（全部 ASCII，任何字体宽度一致）：
+      ###--  有胜率
+      -----  没有胜率（前一日空仓，无可验证股票）
+      .....  没有胜率（当日没跑选股）
+      =====  没有胜率（休市）
+    """
     key = ds[5:]
-    bar = "░░░░░"
-    text = ""
+    bar = "-" * BAR_W
+    text = "没有胜率"
     if not _is_trading_day(ds):
-        text = "休市"
+        text, bar = "休市", "=" * BAR_W
     elif row is not None:
         win = pd.to_numeric(row.get("胜率"), errors="coerce")
-        if pd.isna(win):
-            note = str(row.get("说明") or "")
-            text = "空仓" if "空仓" in note else "无票"
-        else:
+        if not pd.isna(win):
             win = float(win)
-            filled = int(win * 5 + 0.5)
-            bar = "█" * filled + "░" * (5 - filled)
+            filled = int(win * BAR_W + 0.5)
+            bar = "#" * filled + "-" * (BAR_W - filled)
             obs = str(row.get("前日类型") or "").strip() == "空仓观察"
             text = f"{win:.0%}" + ("*" if obs else "")
     else:
         prev = prev_trading_day(ds)
-        text = "空仓" if (prev and prev in empty_days) else "未跑"
-    return f"{key} {bar} {text}"
+        if not (prev and prev in empty_days):
+            bar = "." * BAR_W  # 当日没跑
+    return f"{key} {bar} {_rpad(text, TEXT_W)}"
 
 
 def _month_days(year: int, month: int, until: str) -> list:
@@ -510,12 +523,13 @@ def _month_days(year: int, month: int, until: str) -> list:
 def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None) -> str:
     """胜率展示：上个月 / 本月 两列对照 + 年内更早交易日的平均胜率。
 
-    单元格含义：
-      11-16 ████░ 80%     正常建仓日胜率
-      11-20 ███░░ 60%*    前一日空仓（观察名单按"假设买入"验证，* 标注）
-      11-03 没有胜率(空仓) 无可验证股票
-      11-09 没有胜率(未跑) 当日没跑选股
-      11-07 休市          周末/节假日
+    单元格含义（柱宽 5，文本右对齐到「没有胜率」的宽度）：
+      10-15 ####-      80%   正常建仓日胜率
+      10-16 -----       0%   胜率为 0%（真跌了，不是"无胜率"）
+      11-20 ###--      60%*  前一日空仓，观察名单按"假设买入"验证（* 标注）
+      11-03 ----- 没有胜率   前一日空仓，无可验证股票
+      10-08 ..... 没有胜率   当日没跑选股
+      10-01 =====     休市   周末/节假日
     """
     if records is None or records.empty:
         return "（暂无胜率记录）"
@@ -535,13 +549,13 @@ def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None
     def cell(ds):
         return _day_cell(ds, by_date.get(ds), empty_days)
 
-    head = _pad(f"{prev_m}月", CELL_W) + f"{cur_m}月"
-    sep = _pad("─" * 12, CELL_W) + "─" * 12
+    head = _pad(f"{prev_m}月", CELL_W) + " " + f"{cur_m}月"
+    sep = "=" * (CELL_W * 2 + 1)
     lines = [head, sep]
     for i in range(max(len(left), len(right))):
-        a = cell(left[i]) if i < len(left) else ""
+        a = cell(left[i]) if i < len(left) else " " * CELL_W
         b = cell(right[i]) if i < len(right) else ""
-        lines.append((_pad(a, CELL_W) + b).rstrip())
+        lines.append((_pad(a, CELL_W) + " " + b).rstrip())
 
     # 年内更早交易日（上月之前）：只给平均胜率，没跑/空仓不计入
     earlier_start = f"{cur_y:04d}-01-01"
@@ -553,8 +567,8 @@ def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None
             if not pd.isna(w):
                 wins.append(float(w))
     lines.append("")
-    lines.append("░=无胜率　*=空仓观察日（按假设买入验证）")
-    lines.append("空仓=前一日空仓无可验证　未跑=当日没跑选股　休市=周末/节假日")
+    lines.append("###-- 胜率　* =空仓观察日（按假设买入验证）")
+    lines.append("----- 没有胜率(前日空仓)　..... 没有胜率(当日未跑)　===== 没有胜率(休市)")
     earlier_end_disp = (datetime(prev_y, prev_m, 1) - timedelta(days=1)).strftime("%Y-%m-%d")
     if wins:
         avg = sum(wins) / len(wins)
