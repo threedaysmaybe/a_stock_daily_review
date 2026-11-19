@@ -457,17 +457,20 @@ def _rate_emoji(win: float) -> str:
 
 
 def format_winrate_mobile(records: pd.DataFrame, until: str = None) -> str:
-    """微信用的胜率视图（单列，逐日一行）。
+    """微信用的胜率视图（单列，逐日一行，三列对齐）。
 
-    微信不是等宽字体：█░▁━ 每个字形宽度不同、中文与数字也不同，
-    两列并排一定错位。这里改用固定宽度 emoji 当标记，每行结构完全一致，
-    所以日期和文字在任何手机上都能对齐。
+    列结构：`MM-DD` + 空格 + 5 格柱 + 空格 + 数字/注释
 
-    标记含义：
-      🟩/🟨/🟥  胜率 ≥80% / 50~79% / <50%
-      ⬜  没有胜率（前一日空仓，无可验证股票）
-      ⬛  没有胜率（当日没跑选股）
-      🏖  休市（周末/节假日）
+    柱形只用 █ 和 ░。原因：微信里 ▁ 和 ━ 的字形比 ░ 宽，
+    放在中间的柱位会把后面的日期/文字整体推歪；所以对齐用 ░，
+    ▁（当日未跑）和 ━（休市）作为行尾标记，既保留你要的三种字符，又不破坏对齐。
+
+    含义：
+      ████░ 80%          有胜率（█ 数=胜率）
+      ░░░░░ 0%           胜率为 0%（真跌了）
+      ░░░░░ 没有胜率（前日空仓）
+      ░░░░░ 没有胜率（当日未跑） ▁▁▁▁▁
+      ░░░░░ 休市 ━━━━━
     """
     if records is None or records.empty:
         return "（暂无胜率记录）"
@@ -484,20 +487,24 @@ def format_winrate_mobile(records: pd.DataFrame, until: str = None) -> str:
     def one_line(ds):
         key = ds[5:]
         row = by_date.get(ds)
+        bar = "░" * 5
         if not _is_trading_day(ds):
-            return f"{key} 🏖 休市"
+            return f"{key} {bar} 休市 ━━━━━"
         if row is not None:
             win = pd.to_numeric(row.get("胜率"), errors="coerce")
             if pd.isna(win):
                 note = str(row.get("说明") or "")
-                return f"{key} ⬜ 没有胜率（" + ("前日空仓" if "空仓" in note else "无票") + "）"
+                why = "前日空仓" if "空仓" in note else "无票"
+                return f"{key} {bar} 没有胜率（{why}）"
             win = float(win)
+            filled = int(win * 5 + 0.5)
+            bar = "█" * filled + "░" * (5 - filled)
             obs = "（空仓观察）" if str(row.get("前日类型") or "").strip() == "空仓观察" else ""
-            return f"{key} {_rate_emoji(win)} {win:.0%}{obs}"
+            return f"{key} {bar} {win:.0%}{obs}"
         prev = prev_trading_day(ds)
         if prev and prev in empty_days:
-            return f"{key} ⬜ 没有胜率（前日空仓）"
-        return f"{key} ⬛ 没有胜率（当日未跑）"
+            return f"{key} {bar} 没有胜率（前日空仓）"
+        return f"{key} {bar} 没有胜率（当日未跑）▁▁▁▁▁"
 
     lines = []
     for (yy, mm, title) in ((prev_y, prev_m, "上月"), (cur_y, cur_m, "本月")):
