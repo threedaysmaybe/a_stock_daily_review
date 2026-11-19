@@ -458,7 +458,7 @@ def _last_trading_day_on_or_before(date_str: str) -> str:
     return date_str
 
 
-def format_winrate_chart(records: pd.DataFrame, n: int = 15, until: str = None) -> str:
+def format_winrate_chart(records: pd.DataFrame, n: int = 30, until: str = None) -> str:
     """胜率时间轴（微信可直接显示）：最近 n 个交易日 + 期间休市日。
 
     每行含义：
@@ -617,7 +617,7 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
             lines.append(f"| 大盘涨幅 | {market_avg:+.2%} |")
             lines.append(f"| 超额 | {verify['avg_ret'] - market_avg:+.2%} |")
         lines.append("")
-        lines.append("**近15个交易日胜率（含休市日）：**")
+        lines.append("**近30个交易日胜率（含休市日）：**")
         lines.append("```")
         lines.append(format_winrate_chart(load_verify_records(), until=date_str))
         lines.append("```")
@@ -645,7 +645,7 @@ def format_daily_message(date_str: str, top, sentiment: dict, verify: dict,
             except Exception:  # noqa: BLE001
                 pass
         lines.append("")
-        lines.append("**近15个交易日胜率（含休市日）：**")
+        lines.append("**近30个交易日胜率（含休市日）：**")
         lines.append("```")
         lines.append(format_winrate_chart(recs, until=date_str))
         lines.append("```")
