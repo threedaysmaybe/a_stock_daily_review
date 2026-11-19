@@ -467,23 +467,31 @@ def _pad(s: str, width: int) -> str:
     return s + " " * max(0, width - _disp_width(s))
 
 
+CELL_W = 18  # 单元格显示宽度（中文按 2 格）
+
+
 def _day_cell(ds: str, row, empty_days: set) -> str:
-    """单日结果单元格文本。"""
+    """单日结果单元格：「MM-DD ███░░ 60%」；无胜率时也保留灰色格子。"""
     key = ds[5:]
-    if row is not None:
+    bar = "░░░░░"
+    text = ""
+    if not _is_trading_day(ds):
+        text = "休市"
+    elif row is not None:
         win = pd.to_numeric(row.get("胜率"), errors="coerce")
-        if not pd.isna(win):
+        if pd.isna(win):
+            note = str(row.get("说明") or "")
+            text = "空仓" if "空仓" in note else "无票"
+        else:
             win = float(win)
-            bar_len = int(win * 5 + 0.5)
-            bar = "█" * bar_len + "░" * (5 - bar_len)
-            tag = "*" if str(row.get("前日类型") or "").strip() == "空仓观察" else ""
-            return f"{key} {bar} {win:.0%}{tag}"
-        note = str(row.get("说明") or "")
-        return f"{key} 没有胜率(" + ("空仓" if "空仓" in note else "无票") + ")"
-    prev = prev_trading_day(ds)
-    if prev and prev in empty_days:
-        return f"{key} 没有胜率(空仓)"
-    return f"{key} 没有胜率(未跑)"
+            filled = int(win * 5 + 0.5)
+            bar = "█" * filled + "░" * (5 - filled)
+            obs = str(row.get("前日类型") or "").strip() == "空仓观察"
+            text = f"{win:.0%}" + ("*" if obs else "")
+    else:
+        prev = prev_trading_day(ds)
+        text = "空仓" if (prev and prev in empty_days) else "未跑"
+    return f"{key} {bar} {text}"
 
 
 def _month_days(year: int, month: int, until: str) -> list:
@@ -525,17 +533,15 @@ def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None
     right = _month_days(cur_y, cur_m, last)
 
     def cell(ds):
-        if not _is_trading_day(ds):
-            return f"{ds[5:]} 休市"
         return _day_cell(ds, by_date.get(ds), empty_days)
 
-    cell_w = 22
-    head = _pad(f"{prev_m}月", cell_w) + _pad(f"{cur_m}月", cell_w).rstrip()
-    lines = [head, _pad("─" * 8, cell_w) + "─" * 8]
+    head = _pad(f"{prev_m}月", CELL_W) + f"{cur_m}月"
+    sep = _pad("─" * 12, CELL_W) + "─" * 12
+    lines = [head, sep]
     for i in range(max(len(left), len(right))):
         a = cell(left[i]) if i < len(left) else ""
         b = cell(right[i]) if i < len(right) else ""
-        lines.append((_pad(a, cell_w) + b).rstrip())
+        lines.append((_pad(a, CELL_W) + b).rstrip())
 
     # 年内更早交易日（上月之前）：只给平均胜率，没跑/空仓不计入
     earlier_start = f"{cur_y:04d}-01-01"
@@ -547,7 +553,8 @@ def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None
             if not pd.isna(w):
                 wins.append(float(w))
     lines.append("")
-    lines.append("* = 空仓观察日（按假设买入验证）")
+    lines.append("░=无胜率　*=空仓观察日（按假设买入验证）")
+    lines.append("空仓=前一日空仓无可验证　未跑=当日没跑选股　休市=周末/节假日")
     earlier_end_disp = (datetime(prev_y, prev_m, 1) - timedelta(days=1)).strftime("%Y-%m-%d")
     if wins:
         avg = sum(wins) / len(wins)
