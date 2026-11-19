@@ -458,53 +458,75 @@ def _last_trading_day_on_or_before(date_str: str) -> str:
     return date_str
 
 
-def _disp_width(s: str) -> int:
-    """显示宽度（中文/全角算 2 格），用于等宽对齐。"""
-    return sum(2 if ord(ch) > 0x2E80 else 1 for ch in s)
+BLOCK_W = 2  # █░ 在中文字体/微信里按全角 2 格渲染
 
 
-def _pad(s: str, width: int) -> str:
+def _is_block(ch: str) -> bool:
+    """方块元素（█░▓▒ 等），宽度随字体变化，单独处理。"""
+    return 0x2580 <= ord(ch) <= 0x259F
+
+
+def _disp_width(s: str, block_w: int = BLOCK_W) -> int:
+    """显示宽度：方块按 block_w 格，中文/全角 2 格，其余 1 格。"""
+    total = 0
+    for ch in s:
+        if _is_block(ch):
+            total += block_w
+        elif ord(ch) > 0x2E80:
+            total += 2
+        else:
+            total += 1
+    return total
+
+
+def _pad(s: str, width: int, block_w: int = BLOCK_W) -> str:
     """右侧补空格到指定显示宽度。"""
-    return s + " " * max(0, width - _disp_width(s))
+    return s + " " * max(0, width - _disp_width(s, block_w))
 
 
-def _rpad(s: str, width: int) -> str:
+def _rpad(s: str, width: int, block_w: int = BLOCK_W) -> str:
     """左侧补空格到指定显示宽度（右对齐）。"""
-    return " " * max(0, width - _disp_width(s)) + s
+    return " " * max(0, width - _disp_width(s, block_w)) + s
 
 
-BAR_W = 5       # 柱宽（ASCII：# 实心 / - 空心，任何字体都是 1 格）
+BAR_W = 5       # 柱宽（5 个方块）
 TEXT_W = 8      # 文本列宽（"没有胜率" = 4 个汉字 = 8 格，最宽者）
-CELL_W = 5 + 1 + BAR_W + 1 + TEXT_W  # 日期 + 空格 + 柱 + 空格 + 文本 = 20
 
 
-def _day_cell(ds: str, row, empty_days: set) -> str:
-    """单日单元格：`MM-DD ###--   60%`，文本右对齐到最宽（没有胜率也显示）。
+def _cell_width(block_w: int = BLOCK_W) -> int:
+    return 5 + 1 + BAR_W * block_w + 1 + TEXT_W
 
-    柱的含义（全部 ASCII，任何字体宽度一致）：
-      ###--  有胜率
-      -----  没有胜率（前一日空仓，无可验证股票）
-      .....  没有胜率（当日没跑选股）
-      =====  没有胜率（休市）
+
+CELL_W = _cell_width()  # 单元格显示宽度（█░ 按 2 格）
+
+
+def _day_cell(ds: str, row, empty_days: set, block_w: int = BLOCK_W) -> str:
+    """单日单元格：`MM-DD ███░░      60%`，文本右对齐到最宽（没有胜率也显示）。
+
+    柱的含义：
+      ███░░  有胜率
+      ░░░░░  没有胜率（前一日空仓，无可验证股票）
+      ▁▁▁▁▁  没有胜率（当日没跑选股）
+      ━━━━━  没有胜率（休市）
     """
     key = ds[5:]
-    bar = "-" * BAR_W
+    bar = "░" * BAR_W
     text = "没有胜率"
     if not _is_trading_day(ds):
-        text, bar = "休市", "=" * BAR_W
+        text, bar = "休市", "━" * BAR_W
     elif row is not None:
         win = pd.to_numeric(row.get("胜率"), errors="coerce")
         if not pd.isna(win):
             win = float(win)
             filled = int(win * BAR_W + 0.5)
-            bar = "#" * filled + "-" * (BAR_W - filled)
+            bar = "█" * filled + "░" * (BAR_W - filled)
             obs = str(row.get("前日类型") or "").strip() == "空仓观察"
             text = f"{win:.0%}" + ("*" if obs else "")
     else:
         prev = prev_trading_day(ds)
         if not (prev and prev in empty_days):
-            bar = "." * BAR_W  # 当日没跑
-    return f"{key} {bar} {_rpad(text, TEXT_W)}"
+            bar = "▁" * BAR_W  # 当日没跑
+    return f"{key} {bar} {_rpad(text, TEXT_W, block_w)}"
 
 
 def _month_days(year: int, month: int, until: str) -> list:
@@ -520,16 +542,19 @@ def _month_days(year: int, month: int, until: str) -> list:
     return out
 
 
-def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None) -> str:
+def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None,
+                         block_w: int = BLOCK_W) -> str:
     """胜率展示：上个月 / 本月 两列对照 + 年内更早交易日的平均胜率。
 
+    block_w：方块柱（█░▁━）的显示宽度。微信/中文字体按 2 格，浏览器等宽字体按 1 格。
+
     单元格含义（柱宽 5，文本右对齐到「没有胜率」的宽度）：
-      10-15 ####-      80%   正常建仓日胜率
-      10-16 -----       0%   胜率为 0%（真跌了，不是"无胜率"）
-      11-20 ###--      60%*  前一日空仓，观察名单按"假设买入"验证（* 标注）
-      11-03 ----- 没有胜率   前一日空仓，无可验证股票
-      10-08 ..... 没有胜率   当日没跑选股
-      10-01 =====     休市   周末/节假日
+      10-15 ████░      80%   正常建仓日胜率
+      10-16 ░░░░░       0%   胜率为 0%（真跌了，不是"无胜率"）
+      11-20 ███░░      60%*  前一日空仓，观察名单按"假设买入"验证（* 标注）
+      11-03 ░░░░░ 没有胜率   前一日空仓，无可验证股票
+      10-08 ▁▁▁▁▁ 没有胜率   当日没跑选股
+      10-01 ━━━━━     休市   周末/节假日
     """
     if records is None or records.empty:
         return "（暂无胜率记录）"
@@ -546,16 +571,18 @@ def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None
     left = _month_days(prev_y, prev_m, last)
     right = _month_days(cur_y, cur_m, last)
 
-    def cell(ds):
-        return _day_cell(ds, by_date.get(ds), empty_days)
+    cw = _cell_width(block_w)
 
-    head = _pad(f"{prev_m}月", CELL_W) + " " + f"{cur_m}月"
-    sep = "=" * (CELL_W * 2 + 1)
+    def cell(ds):
+        return _day_cell(ds, by_date.get(ds), empty_days, block_w)
+
+    head = _pad(f"{prev_m}月", cw, block_w) + " " + f"{cur_m}月"
+    sep = "=" * (cw * 2 + 1)
     lines = [head, sep]
     for i in range(max(len(left), len(right))):
-        a = cell(left[i]) if i < len(left) else " " * CELL_W
+        a = cell(left[i]) if i < len(left) else " " * cw
         b = cell(right[i]) if i < len(right) else ""
-        lines.append((_pad(a, CELL_W) + " " + b).rstrip())
+        lines.append((_pad(a, cw, block_w) + " " + b).rstrip())
 
     # 年内更早交易日（上月之前）：只给平均胜率，没跑/空仓不计入
     earlier_start = f"{cur_y:04d}-01-01"
@@ -567,8 +594,8 @@ def format_winrate_chart(records: pd.DataFrame, n: int = None, until: str = None
             if not pd.isna(w):
                 wins.append(float(w))
     lines.append("")
-    lines.append("###-- 胜率　* =空仓观察日（按假设买入验证）")
-    lines.append("----- 没有胜率(前日空仓)　..... 没有胜率(当日未跑)　===== 没有胜率(休市)")
+    lines.append("███░░ 胜率　* =空仓观察日（按假设买入验证）")
+    lines.append("░░░░░ 没有胜率(前日空仓)　▁▁▁▁▁ 没有胜率(当日未跑)　━━━━━ 没有胜率(休市)")
     earlier_end_disp = (datetime(prev_y, prev_m, 1) - timedelta(days=1)).strftime("%Y-%m-%d")
     if wins:
         avg = sum(wins) / len(wins)
