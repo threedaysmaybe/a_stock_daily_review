@@ -11,26 +11,26 @@ short_term:
   factors:
     momentum_20d:
       query: 20日涨跌幅
-      weight: 0.4615
+      weight: 0.4299
       direction: 1
     main_net_inflow:
       query: 主力资金流向
-      weight: 0.222
+      weight: 0.2248
       direction: 1
     volume_ratio:
       query: 量比
-      weight: 0.3451
+      weight: 0.2
       direction: 1
     turnover:
       query: 换手率
       weight: 0.01
-      direction: 1
+      direction: -1
     float_market_cap:
       query: 流通市值
-      weight: 0.0144
+      weight: 0.0223
       direction: -1
     ma_bias:
-      weight: 0.0442
+      weight: 0.0428
       direction: 1
     sector_heat:
       weight: 0
