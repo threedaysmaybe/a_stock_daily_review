@@ -461,16 +461,15 @@ def format_winrate_mobile(records: pd.DataFrame, until: str = None) -> str:
 
     列结构：`MM-DD` + 空格 + 5 格柱 + 空格 + 数字/注释
 
-    柱形只用 █ 和 ░。原因：微信里 ▁ 和 ━ 的字形比 ░ 宽，
-    放在中间的柱位会把后面的日期/文字整体推歪；所以对齐用 ░，
-    ▁（当日未跑）和 ━（休市）作为行尾标记，既保留你要的三种字符，又不破坏对齐。
+    柱形只用 █ 和 ░（两者字形等宽），柱位固定 5 格，
+    所以日期、柱、数字/注释三列在任何手机上都能对齐。
 
     含义：
       ████░ 80%          有胜率（█ 数=胜率）
       ░░░░░ 0%           胜率为 0%（真跌了）
       ░░░░░ 没有胜率（前日空仓）
-      ░░░░░ 没有胜率（当日未跑） ▁▁▁▁▁
-      ░░░░░ 休市 ━━━━━
+      ░░░░░ 没有胜率（当日未跑）
+      ░░░░░ 休市         周末/节假日
     """
     if records is None or records.empty:
         return "（暂无胜率记录）"
@@ -489,7 +488,7 @@ def format_winrate_mobile(records: pd.DataFrame, until: str = None) -> str:
         row = by_date.get(ds)
         bar = "░" * 5
         if not _is_trading_day(ds):
-            return f"{key} {bar} 休市 ━━━━━"
+            return f"{key} {bar} 休市"
         if row is not None:
             win = pd.to_numeric(row.get("胜率"), errors="coerce")
             if pd.isna(win):
@@ -504,7 +503,7 @@ def format_winrate_mobile(records: pd.DataFrame, until: str = None) -> str:
         prev = prev_trading_day(ds)
         if prev and prev in empty_days:
             return f"{key} {bar} 没有胜率（前日空仓）"
-        return f"{key} {bar} 没有胜率（当日未跑）▁▁▁▁▁"
+        return f"{key} {bar} 没有胜率（当日未跑）"
 
     lines = []
     for (yy, mm, title) in ((prev_y, prev_m, "上月"), (cur_y, cur_m, "本月")):
